@@ -35,12 +35,31 @@ sheets as tabs along the top, several tables per sheet placed on a canvas, month
 - **Download** saves the whole file, snapshots included (`<name> YYYY-MM-DD.json`).
   **Import file** always creates a new file and never overwrites one
 
+**Phase 2 — ledgers, imports, sources, formulas (done)**
+- **Ledger tables** (+ Ledger): a list of dated amounts with Date, Amount, Category, Note. Type
+  dates in any common form (2026-11-07, 2026/11/7, 2026年11月7日, 11/7). Paste a block onto the
+  Total row to append entries
+- **Import CSV / Excel** into a ledger: `.csv` (UTF-8 or GBK), `.tsv`, `.xlsx`. Columns are guessed
+  from Chinese or English headers (交易日期, 金额, 借方/贷方, 收入/支出, 类别, 摘要…); separate money-in
+  and money-out columns are supported; preview before importing; replace or append. The mapping
+  is saved in the ledger, so re-importing a new export is one step. Old `.xls` and `.numbers`
+  files need saving as `.xlsx` or `.csv` first
+- **Rows from a ledger** ("From ledger" in the panel): each month shows the sum of the ledger's
+  entries in that month, filtered by categories and/or note text, optionally sign-flipped. Typing
+  in a cell overrides that month (orange corner); clearing it goes back to the ledger
+- **Formula rows** count toward net cash flow, e.g. `[Sales] * -6%`.
+  **Footer formula rows** sit below Balance and don't count, e.g. `[Balance] / ABS([Payroll])`.
+  References: `[Row]`, `[Table].[Row]` (any sheet), `[Net cash flow]` / `[Balance]` (footers only;
+  also 净现金流 / 余额). Functions: `SUM MIN MAX ABS ROUND IF PREV` (`PREV([Sales], 2)` = two months
+  back, for payment lags). Chinese full-width input (【】（）×－％) works. Errors show as `#ERR`
+  with the reason in the panel; circular references are caught
+- **Sync setting** per file (default every 15 minutes). One window per file runs the timer. It has
+  nothing to pull until the Feishu/Huoban connectors exist (phase 4)
+
 **Next**
-- Phase 2: ledger tables (date, amount, category, note), CSV/Excel import, row data sources with
-  filters, formula rows; per-file sync settings and the sync loop (see below)
 - Phase 3: Cloudflare backend (Workers + D1), files synced between devices, login for editing;
   the `FileStore` interface in `src/lib/files.ts` gets a server-backed implementation
-- Phase 4: Feishu and Huoban connectors with scheduled sync
+- Phase 4: Feishu and Huoban connectors, pulled into ledgers on the sync timer
 - Last: view-only share links
 
 ## Development
@@ -55,7 +74,7 @@ npm run build    # production build in dist/
 
 Stack: Vite + TypeScript + Svelte 5. No UI or spreadsheet libraries.
 
-## Sync design (phases 2–4)
+## Sync design
 
 - Sync settings live in the file: which source feeds which row, field mapping, filter, interval.
   Secrets (Feishu/Huoban app keys) never go in the file, so a downloaded file can't leak them; the

@@ -50,7 +50,8 @@
     <button onclick={() => app.redo()} disabled={!app.canRedo} title="Redo (⇧⌘Z)">↷ Redo</button>
   </div>
   <div class="group">
-    <button onclick={() => app.addTable()}>+ Table</button>
+    <button onclick={() => app.addTable('cashflow')} title="Add a month-by-month cash-flow table">+ Table</button>
+    <button onclick={() => app.addTable('ledger')} title="Add a list of dated amounts (entered or imported)">+ Ledger</button>
     <button onclick={() => tableId && app.addRow(tableId)} disabled={!tableId}>+ Row</button>
     <button onclick={() => app.deleteSelectedRows()} disabled={!hasSel}>− Row</button>
     <button onclick={() => app.moveSelectedRow(-1)} disabled={!hasSel} title="Move row up">↑</button>

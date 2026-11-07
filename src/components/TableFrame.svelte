@@ -1,34 +1,16 @@
 <script lang="ts">
-  import { app, COL_W, LABEL_W, ROW_H, TITLE_H } from '../lib/store.svelte';
-  import { computeFooters } from '../lib/compute';
-  import { formatNumber } from '../lib/format';
-  import { cellsInRanges, FOOTERS, styleKey, type Pos } from '../lib/grid';
+  import type { Snippet } from 'svelte';
+  import { app, TITLE_H } from '../lib/store.svelte';
+  import { cellsInRanges, type Pos } from '../lib/grid';
   import type { Table } from '../lib/model';
-  import { groupByYear, monthLabel } from '../lib/months';
-  import { STYLE_BY_ID } from '../lib/styles';
 
-  let { table }: { table: Table } = $props();
+  let { table, children }: { table: Table; children: Snippet } = $props();
 
-  const months = $derived(app.months);
-  const footers = $derived(computeFooters(table, months));
-  const years = $derived(groupByYear(months));
   const sel = $derived(app.selection?.tableId === table.id ? app.selection : null);
-  const selected = $derived(
-    new Set(sel ? cellsInRanges(sel.ranges).map((p) => `${p.r},${p.c}`) : []),
-  );
-  const nBody = $derived(table.rows.length);
+  const selected = $derived(new Set(sel ? cellsInRanges(sel.ranges).map((p) => `${p.r},${p.c}`) : []));
 
-  function cellStyle(rowId: string, colKey: string): string {
-    const s = STYLE_BY_ID[table.styles[styleKey(rowId, colKey)]];
-    return s ? `background:${s.bg};color:${s.fg}` : '';
-  }
-
-  function hasStyle(rowId: string, colKey: string): boolean {
-    return !!table.styles[styleKey(rowId, colKey)];
-  }
-
-  function isAnchor(r: number, c: number): boolean {
-    return !!sel && sel.anchor.r === r && sel.anchor.c === c;
+  function isAnchor(p: Pos): boolean {
+    return !!sel && sel.anchor.r === p.r && sel.anchor.c === p.c;
   }
 
   // ----- pointer handling -----
@@ -53,15 +35,18 @@
     if (app.editing) app.commitEdit();
     moved = false;
     if (e.pointerType === 'touch') {
-      const key = `${p.r},${p.c}`;
-      if (!selected.has(key)) {
+      if (!selected.has(`${p.r},${p.c}`)) {
         pendingTap = p;
         return;
       }
-      tapToEdit = isAnchor(p.r, p.c) && selected.size === 1;
+      tapToEdit = isAnchor(p) && selected.size === 1;
       dragging = true;
     } else {
+      // preventDefault stops text selection but also keeps focus where it was;
+      // release a panel field so typing reaches the grid.
       e.preventDefault();
+      const active = document.activeElement as HTMLElement | null;
+      if (active && active !== app.editorEl && /^(INPUT|SELECT|TEXTAREA|BUTTON)$/.test(active.tagName)) active.blur();
       const mode = e.shiftKey ? 'extend' : e.metaKey || e.ctrlKey ? 'add' : 'new';
       app.select(table.id, p, mode);
       dragging = true;
@@ -106,10 +91,11 @@
   let moveStart: { x: number; y: number; tx: number; ty: number; checkpointed: boolean } | null = null;
 
   function onTitleDown(e: PointerEvent) {
-    if ((e.target as HTMLElement).closest('button') || app.readonly) return;
+    if ((e.target as HTMLElement).closest('button')) return;
     e.preventDefault();
     app.commitEdit();
     app.focusTableId = table.id;
+    if (app.readonly) return;
     moveStart = { x: e.clientX, y: e.clientY, tx: table.x, ty: table.y, checkpointed: false };
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   }
@@ -133,11 +119,7 @@
   }
 </script>
 
-<div
-  class="table"
-  class:focused={app.focusTableId === table.id}
-  style="left:{table.x}px;top:{table.y}px"
->
+<div class="table" class:focused={app.focusTableId === table.id} style="left:{table.x}px;top:{table.y}px">
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
     class="title"
@@ -149,85 +131,19 @@
   >
     <span class="grip">⠿</span>
     <span class="name">{table.name}</span>
+    {#if table.kind === 'ledger'}<span class="kind">Ledger</span>{/if}
   </div>
-  <table
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div
+    class="body"
+    class:has-sel={!!sel}
     onpointerdown={onCellDown}
     onpointerup={onTouchUp}
     onpointercancel={() => (pendingTap = null)}
     ondblclick={onDblClick}
   >
-    <colgroup>
-      <col style="width:{LABEL_W}px" />
-      {#each months as m (m)}<col style="width:{COL_W}px" />{/each}
-    </colgroup>
-    <thead>
-      <tr style="height:{ROW_H}px">
-        <th class="corner" rowspan="2"></th>
-        {#each years as y (y.year)}<th class="year" colspan={y.count}>{y.year}</th>{/each}
-      </tr>
-      <tr style="height:{ROW_H}px">
-        {#each months as m (m)}<th class="month">{monthLabel(m)}</th>{/each}
-      </tr>
-    </thead>
-    <tbody>
-      {#each table.rows as row, r (row.id)}
-        <tr style="height:{ROW_H}px">
-          <td
-            data-t={table.id}
-            data-r={r}
-            data-c="0"
-            class="label"
-            class:sel={selected.has(`${r},0`)}
-            class:anchor={isAnchor(r, 0)}
-            style={cellStyle(row.id, 'label')}
-          >{row.label}</td>
-          {#each months as m, i (m)}
-            {@const v = row.values[m]}
-            <td
-              data-t={table.id}
-              data-r={r}
-              data-c={i + 1}
-              class="num"
-              class:neg={v < 0 && !hasStyle(row.id, m)}
-              class:sel={selected.has(`${r},${i + 1}`)}
-              class:anchor={isAnchor(r, i + 1)}
-              style={cellStyle(row.id, m)}
-            >{formatNumber(v)}</td>
-          {/each}
-        </tr>
-      {/each}
-    </tbody>
-    <tfoot>
-      {#each FOOTERS as f, fi (f.id)}
-        {@const r = nBody + fi}
-        {@const series = fi === 0 ? footers.cashFlow : footers.balance}
-        <tr style="height:{ROW_H}px" class:first={fi === 0} class:balance={fi === 1}>
-          <td
-            data-t={table.id}
-            data-r={r}
-            data-c="0"
-            class="label"
-            class:sel={selected.has(`${r},0`)}
-            class:anchor={isAnchor(r, 0)}
-            style={cellStyle(f.id, 'label')}
-          >{f.label}</td>
-          {#each months as m, i (m)}
-            {@const v = series[i]}
-            <td
-              data-t={table.id}
-              data-r={r}
-              data-c={i + 1}
-              class="num"
-              class:neg={v !== null && v < 0 && !hasStyle(f.id, m)}
-              class:sel={selected.has(`${r},${i + 1}`)}
-              class:anchor={isAnchor(r, i + 1)}
-              style={cellStyle(f.id, m)}
-            >{formatNumber(v)}</td>
-          {/each}
-        </tr>
-      {/each}
-    </tfoot>
-  </table>
+    {@render children()}
+  </div>
 </div>
 
 <style>
@@ -259,7 +175,16 @@
     color: var(--muted);
     font-size: 12px;
   }
-  table {
+  .kind {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--muted);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 0 5px;
+  }
+  /* Shared cell styles for both kinds of grid. */
+  .body :global(table) {
     border-collapse: collapse;
     table-layout: fixed;
     user-select: none;
@@ -267,8 +192,8 @@
     -webkit-touch-callout: none;
     font-variant-numeric: tabular-nums;
   }
-  th,
-  td {
+  .body :global(th),
+  .body :global(td) {
     border-right: 1px solid var(--line);
     border-bottom: 1px solid var(--line);
     padding: 0 8px;
@@ -276,49 +201,36 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  th {
+  .body :global(th) {
     background: var(--head);
     font-weight: 600;
     color: var(--muted);
   }
-  th.year {
-    text-align: left;
-    color: var(--text);
-  }
-  th.month {
-    text-align: right;
-  }
-  td {
+  .body :global(td) {
     position: relative;
     cursor: cell;
     touch-action: pan-x pan-y;
   }
-  td.sel {
+  .body :global(td.sel) {
     touch-action: none;
     background-image: linear-gradient(var(--accent-soft), var(--accent-soft));
   }
-  td.anchor {
+  .body :global(td.anchor) {
     outline: 2px solid var(--accent);
     outline-offset: -2px;
   }
-  td.num {
+  .body :global(.right) {
     text-align: right;
   }
-  td.label {
-    font-weight: 500;
-  }
-  td.neg {
+  .body :global(td.neg) {
     color: var(--neg);
   }
-  tfoot td {
+  .body :global(tfoot td) {
     background-color: var(--foot);
     font-weight: 600;
     cursor: default;
   }
-  tfoot tr.first td {
+  .body :global(tfoot tr.first td) {
     border-top: 2px solid var(--line-strong);
-  }
-  tfoot tr.balance td {
-    font-weight: 700;
   }
 </style>
