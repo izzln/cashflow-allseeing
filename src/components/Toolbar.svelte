@@ -1,10 +1,14 @@
 <script lang="ts">
   import { app } from '../lib/store.svelte';
-  import { normalizeWorkbook } from '../lib/model';
   import { STYLES } from '../lib/styles';
+  import SnapshotsMenu from './SnapshotsMenu.svelte';
+
+  async function toNewFile() {
+    const id = await app.snapshotToNewFile();
+    if (id) location.hash = `#/f/${id}`;
+  }
 
   let { showInspector = $bindable() }: { showInspector: boolean } = $props();
-  let fileEl = $state<HTMLInputElement | null>(null);
 
   const tableId = $derived(app.selection?.tableId ?? app.focusTableId);
   const hasSel = $derived(!!app.selection);
@@ -37,38 +41,17 @@
     }
   }
 
-  function backup() {
-    const blob = new Blob([app.exportJSON()], { type: 'application/json' });
-    const a = document.createElement('a');
-    const d = new Date();
-    const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
-    a.href = URL.createObjectURL(blob);
-    a.download = `cashflow-backup-${stamp}.json`;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-  }
-
-  async function restore(e: Event) {
-    const file = (e.target as HTMLInputElement).files?.[0];
-    (e.target as HTMLInputElement).value = '';
-    if (!file) return;
-    try {
-      const wb = normalizeWorkbook(JSON.parse(await file.text()));
-      if (!wb) throw new Error('bad');
-      if (confirm('Replace the current workbook with this backup? (You can undo.)')) app.replaceWorkbook(wb);
-    } catch {
-      alert('That file is not a valid backup.');
-    }
-  }
 </script>
 
 <div class="toolbar">
+  {#if !app.readonly}
   <div class="group">
     <button onclick={() => app.undo()} disabled={!app.canUndo} title="Undo (⌘Z)">↶ Undo</button>
     <button onclick={() => app.redo()} disabled={!app.canRedo} title="Redo (⇧⌘Z)">↷ Redo</button>
   </div>
   <div class="group">
-    <button onclick={() => app.addTable()}>+ Table</button>
+    <button onclick={() => app.addTable('cashflow')} title="Add a month-by-month cash-flow table">+ Table</button>
+    <button onclick={() => app.addTable('ledger')} title="Add a list of dated amounts (entered or imported)">+ Ledger</button>
     <button onclick={() => tableId && app.addRow(tableId)} disabled={!tableId}>+ Row</button>
     <button onclick={() => app.deleteSelectedRows()} disabled={!hasSel}>− Row</button>
     <button onclick={() => app.moveSelectedRow(-1)} disabled={!hasSel} title="Move row up">↑</button>
@@ -85,14 +68,17 @@
       >
     {/each}
   </div>
+  {/if}
   <div class="group">
     <button onclick={copy} disabled={!hasSel}>Copy</button>
-    <button onclick={paste} disabled={!hasSel}>Paste</button>
+    {#if !app.readonly}<button onclick={paste} disabled={!hasSel}>Paste</button>{/if}
   </div>
   <div class="group right">
-    <button onclick={backup} title="Download all data as a file">Backup</button>
-    <button onclick={() => fileEl?.click()} title="Load a backup file">Restore</button>
-    <input bind:this={fileEl} type="file" accept="application/json,.json" hidden onchange={restore} />
+    {#if app.readonly}
+      <button onclick={toNewFile} title="Make an editable file from this snapshot">Save as new file</button>
+    {/if}
+    <SnapshotsMenu />
+    <button onclick={() => app.downloadFile()} title="Download this file, with its snapshots">Download</button>
     <button onclick={() => (showInspector = !showInspector)} class:on={showInspector}>Panel</button>
   </div>
 </div>

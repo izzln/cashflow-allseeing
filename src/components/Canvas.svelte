@@ -1,7 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { app, tableHeight, tableWidth } from '../lib/store.svelte';
-  import TableView from './TableView.svelte';
+  import TableFrame from './TableFrame.svelte';
+  import CashGrid from './CashGrid.svelte';
+  import LedgerGrid from './LedgerGrid.svelte';
 
   let contentEl: HTMLDivElement;
   let editorEl: HTMLInputElement;
@@ -10,7 +12,7 @@
     let w = 0;
     let h = 0;
     for (const t of app.sheet.tables) {
-      w = Math.max(w, t.x + tableWidth(app.months.length));
+      w = Math.max(w, t.x + tableWidth(t, app.months.length));
       h = Math.max(h, t.y + tableHeight(t));
     }
     return { w: w + 400, h: h + 400 };
@@ -55,7 +57,9 @@
     onpointerdown={onBackground}
   >
     {#each app.sheet.tables as t (t.id)}
-      <TableView table={t} />
+      <TableFrame table={t}>
+        {#if t.kind === 'ledger'}<LedgerGrid table={t} />{:else}<CashGrid table={t} />{/if}
+      </TableFrame>
     {/each}
     <input
       class="editor"
@@ -103,5 +107,9 @@
   }
   .editor.open {
     opacity: 1;
+  }
+  /* When closed it must not sit over the last edited cell and swallow clicks. */
+  .editor:not(.open) {
+    pointer-events: none;
   }
 </style>

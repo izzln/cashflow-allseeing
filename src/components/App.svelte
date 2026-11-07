@@ -6,6 +6,31 @@
   import Canvas from './Canvas.svelte';
   import Inspector from './Inspector.svelte';
   import StatusBar from './StatusBar.svelte';
+  import Home from './Home.svelte';
+  import { isFileKey, isSnapshotKey } from '../lib/files';
+
+  /**
+   * Each window shows its file in the address: #/f/<id>, or #/f/<id>/s/<snapshotId>
+   * for a read-only snapshot. So windows can hold different files, or the same one.
+   */
+  let view = $state<'loading' | 'home' | 'file' | 'missing'>('loading');
+
+  async function route() {
+    const m = location.hash.match(/^#\/f\/([\w-]+)(?:\/s\/([\w-]+))?/);
+    if (!m) {
+      await app.close();
+      view = 'home';
+      return;
+    }
+    view = (await app.open(m[1], m[2] ?? null)) ? 'file' : 'missing';
+  }
+
+  $effect(() => {
+    if (view !== 'file' || !app.file) return;
+    document.title = app.snapshot
+      ? `${app.file.name} · ${app.snapshot.label} — Cashflow`
+      : `${app.file.name} — Cashflow`;
+  });
 
   let showInspector = $state(typeof window !== 'undefined' && window.innerWidth >= 1000);
 
@@ -15,7 +40,7 @@
   }
 
   function onKeydown(e: KeyboardEvent) {
-    if (inField(e)) return;
+    if (view !== 'file' || inField(e)) return;
     const mod = e.metaKey || e.ctrlKey;
     if (mod && e.key.toLowerCase() === 'z') {
       e.preventDefault();
@@ -64,7 +89,7 @@
   }
 
   function onCopy(e: ClipboardEvent) {
-    if (inField(e) || !app.selection) return;
+    if (view !== 'file' || inField(e) || !app.selection) return;
     const data = app.copyData();
     if (!data || !e.clipboardData) return;
     e.preventDefault();
@@ -78,7 +103,7 @@
   }
 
   function onPaste(e: ClipboardEvent) {
-    if (inField(e) || !app.selection) return;
+    if (view !== 'file' || inField(e) || !app.selection) return;
     const text = e.clipboardData?.getData('text/plain');
     if (!text) return;
     e.preventDefault();
@@ -88,6 +113,13 @@
   onMount(() => {
     const flush = () => app.flush();
     const refresh = () => app.refreshMonths();
+    const onStorage = (e: StorageEvent) => {
+      if (app.file && isSnapshotKey(e.key, app.file.id)) app.refreshSnapshots();
+      else if (isFileKey(e.key)) app.onExternalChange();
+    };
+    route();
+    window.addEventListener('hashchange', route);
+    window.addEventListener('storage', onStorage);
     window.addEventListener('pagehide', flush);
     window.addEventListener('focus', refresh);
     document.addEventListener('visibilitychange', () => {
@@ -95,6 +127,8 @@
       else refresh();
     });
     return () => {
+      window.removeEventListener('hashchange', route);
+      window.removeEventListener('storage', onStorage);
       window.removeEventListener('pagehide', flush);
       window.removeEventListener('focus', refresh);
     };
@@ -104,17 +138,26 @@
 <svelte:window onkeydown={onKeydown} />
 <svelte:document oncopy={onCopy} oncut={onCut} onpaste={onPaste} />
 
-<div class="shell">
-  <SheetTabs />
-  <Toolbar bind:showInspector />
-  <div class="main">
-    <Canvas />
-    {#if showInspector}
-      <Inspector />
-    {/if}
+{#if view === 'home'}
+  <Home />
+{:else if view === 'missing'}
+  <div class="missing">
+    <p>This file doesn't exist in this browser. It may have been deleted, or it was made on another device.</p>
+    <a href="#/">‹ All files</a>
   </div>
-  <StatusBar />
-</div>
+{:else if view === 'file' && app.file}
+  <div class="shell">
+    <SheetTabs />
+    <Toolbar bind:showInspector />
+    <div class="main">
+      <Canvas />
+      {#if showInspector}
+        <Inspector />
+      {/if}
+    </div>
+    <StatusBar />
+  </div>
+{/if}
 
 <style>
   .shell {
@@ -122,6 +165,12 @@
     flex-direction: column;
     height: 100%;
     padding-top: env(safe-area-inset-top);
+  }
+  .missing {
+    max-width: 520px;
+    margin: 80px auto;
+    padding: 0 16px;
+    line-height: 1.5;
   }
   .main {
     flex: 1;
