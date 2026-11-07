@@ -53,3 +53,19 @@ export function groupByYear(months: MonthKey[]): { year: number; count: number }
   }
   return out;
 }
+
+export function monthName(k: MonthKey): string {
+  return `${monthLabel(k)} ${parseMonth(k).year}`;
+}
+
+/**
+ * Month-end rule: which month (if any) should be frozen now. The file's saved
+ * content hasn't changed since its last save, so if no snapshot covers the
+ * month that just ended, the saved content is exactly that month's end state.
+ */
+export function monthEndDue(createdMonth: MonthKey, done: MonthKey | null | undefined, nowMonth: MonthKey): MonthKey | null {
+  const lastEnded = addMonths(nowMonth, -1);
+  if (createdMonth > lastEnded) return null;
+  if (done && done >= lastEnded) return null;
+  return lastEnded;
+}

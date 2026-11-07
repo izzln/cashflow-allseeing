@@ -27,6 +27,8 @@
   const STATE_LABEL = {
     saved: 'Saved',
     pending: 'Saving…',
+    offline: 'Offline · will retry',
+    signin: 'Sign in to save',
     error: 'Not saved',
   } as const;
 
@@ -120,6 +122,8 @@
     white-space: nowrap;
     font-size: 12px;
   }
+  .state.offline,
+  .state.signin,
   .state.error {
     color: var(--neg);
   }

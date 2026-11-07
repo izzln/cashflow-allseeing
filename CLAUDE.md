@@ -4,7 +4,8 @@ Cash-flow tracker/forecast web app. Numbers-like UI: top sheet tabs, free-placed
 months as columns. Single editor (the owner) on Mac + iPad; others will get view-only links (phase 3).
 
 ## Commands
-- `npm test` (vitest, tests/), `npm run check` (svelte-check), `npm run build`
+- `npm test` (vitest, tests/), `npm run check` (svelte-check + worker tsc), `npm run build`
+- `npm run dev:server` — Worker + local D1 on :8787 (secrets in `.dev.vars`, gitignored); `npm run deploy`
 
 ## Layout
 - `src/lib/months.ts` — 'YYYY-MM' month keys; visible window = current month → Dec next year
@@ -13,6 +14,10 @@ months as columns. Single editor (the owner) on Mac + iPad; others will get view
 - `src/lib/formula.ts` — formula tokenizer/parser/evaluator (`[Row]`, `[Table].[Row]`, PREV, SUM…; full-width input)
 - `src/lib/dates.ts`, `src/lib/import/` — date parsing, CSV (GBK fallback), minimal .xlsx reader, column mapping
 - `src/lib/sync.ts` — `SyncLoop`: per-file timer, one window via Web Locks
+- `src/lib/remote.ts` — `RemoteFileStore` (fetch `/api`, BroadcastChannel + 15 s polling for `watch`);
+  `src/lib/session.svelte.ts` picks local vs remote at startup (`/api/session`), sign-in, local→server upload
+- `worker/` — Cloudflare Worker: `/api` routes (files, snapshots, month-end, login), `auth.ts` (signed cookie);
+  schema in `migrations/`. The Worker never parses workbook JSON (free-plan CPU limit); it stores it as text
 - `src/lib/files.ts` — files: `FileStore` interface (async; phase 3 adds a Cloudflare version),
   `LocalFileStore` over localStorage, per-file `rev`, in-file snapshots (manual + month-end), export format
 - `src/lib/merge.ts` — 3-way JSON merge (objects by key, id'd arrays by id); used for multi-window edits and undo
@@ -28,6 +33,7 @@ months as columns. Single editor (the owner) on Mac + iPad; others will get view
 ## Conventions
 - Every user-visible data change goes through `app.change(fn)` so it is undoable and saved; `save()` bumps
   `app.version`, which rebuilds `app.ev` (the Evaluator). Don't read computed values from anywhere else.
+- All storage goes through `fileStore` (switchable: `LocalFileStore` or `RemoteFileStore`); change notices via `fileStore.watch`.
 - Saves pass the `rev` they started from; a mismatch means another window saved first → load, `merge3(base, mine, theirs)`, retry.
   Storage events from other windows are merged the same way. Undo = `merge3(after, before, current)`, so it reverts only this window's change.
 - Month-end rule: before the first save of a new month (and on open), freeze the stored content as last month's snapshot.

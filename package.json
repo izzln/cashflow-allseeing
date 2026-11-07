@@ -7,10 +7,13 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "check": "svelte-check --tsconfig ./tsconfig.json",
-    "test": "vitest run"
+    "check": "svelte-check --tsconfig ./tsconfig.json && tsc -p worker/tsconfig.json",
+    "test": "vitest run",
+    "dev:server": "vite build && wrangler d1 migrations apply DB --local && wrangler dev --local",
+    "deploy": "vite build && wrangler d1 migrations apply DB --remote && wrangler deploy"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "5.20261023.1",
     "@sveltejs/vite-plugin-svelte": "7.3.1",
     "@tsconfig/svelte": "5.0.8",
     "@types/node": "22.20.5",
@@ -18,6 +21,7 @@
     "svelte-check": "4.7.8",
     "typescript": "6.0.3",
     "vite": "8.3.6",
-    "vitest": "5.1.0"
+    "vitest": "5.1.0",
+    "wrangler": "4.151.3"
   }
 }

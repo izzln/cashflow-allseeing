@@ -103,7 +103,8 @@ class AppState {
   snapshot = $state<SnapshotMeta | null>(null);
   /** Snapshots stored in the open file, newest first. */
   snapshots = $state<SnapshotMeta[]>([]);
-  saveState = $state<'saved' | 'pending' | 'error'>('saved');
+  /** offline: will retry; signin: waiting for the user to sign in again. */
+  saveState = $state<'saved' | 'pending' | 'offline' | 'signin' | 'error'>('saved');
   activeSheetId = $state('');
   selection = $state<Selection | null>(null);
   /** Table shown in the inspector (set by clicking a title or a cell). */
@@ -367,7 +368,13 @@ class AppState {
   async onExternalChange() {
     const f = this.file;
     if (!f || this.readonly) return;
-    const doc = await fileStore.load(f.id);
+    let doc: FileDoc | null;
+    try {
+      doc = await fileStore.load(f.id);
+    } catch {
+      return; // offline or signed out: try again on the next change notice
+    }
+    if (this.file !== f) return;
     if (!doc) {
       this.saveState = 'error';
       this.flashNotice('This file was deleted in another window.');
@@ -379,7 +386,7 @@ class AppState {
 
   private absorb(doc: FileDoc) {
     const f = this.file!;
-    const merged = this.saveState === 'pending' ? merge3(this.base, this.plain(), doc.wb) : doc.wb;
+    const merged = this.saveState !== 'saved' ? merge3(this.base, this.plain(), doc.wb) : doc.wb;
     this.replace(merged);
     this.base = doc.wb;
     f.rev = doc.meta.rev;
@@ -397,12 +404,19 @@ class AppState {
     if (top && !top.after) top.after = this.plain();
     this.version++;
     this.changeSeq++;
-    this.saveState = 'pending';
+    // Keep showing "offline"/"sign in" until a save actually goes through.
+    if (this.saveState === 'saved' || this.saveState === 'error') this.saveState = 'pending';
     if (this.saveTimer) clearTimeout(this.saveTimer);
     this.saveTimer = setTimeout(() => this.flush(), 250);
   }
 
   private saving: Promise<void> = Promise.resolve();
+  private retryDelay = 0;
+
+  /** True while edits exist that the store hasn't confirmed. */
+  get unsaved(): boolean {
+    return !!this.file && !this.readonly && this.saveState !== 'saved';
+  }
 
   /** Write pending changes now. Saves run one at a time; a clash with another window merges and retries. */
   flush(): Promise<void> {
@@ -411,7 +425,7 @@ class AppState {
     const f = this.file;
     if (!f || this.readonly) return this.saving;
     writeStorage(SHEET_KEY + f.id, this.activeSheetId);
-    if (this.saveState !== 'pending') return this.saving;
+    if (this.saveState === 'saved') return this.saving;
     const run = async () => {
       for (let attempt = 0; attempt < 5; attempt++) {
         if (this.file !== f) return;
@@ -424,19 +438,42 @@ class AppState {
           f.updatedAt = res.meta.updatedAt;
           f.monthEndDone = res.meta.monthEndDone;
           this.base = wb;
+          this.retryDelay = 0;
           // Still 'pending' if more edits arrived while this save was running.
           if (this.changeSeq === seq) this.saveState = 'saved';
+          else this.saveState = 'pending';
           if (res.meta.monthEndDone !== monthEndBefore) await this.refreshSnapshots();
+          return;
+        }
+        if (res.reason === 'network') {
+          // Keep the edits and try again, waiting longer each time (up to a minute).
+          this.saveState = 'offline';
+          this.retryDelay = Math.min(60_000, Math.max(2_000, this.retryDelay * 2));
+          if (this.saveTimer) clearTimeout(this.saveTimer);
+          this.saveTimer = setTimeout(() => this.flush(), this.retryDelay);
+          return;
+        }
+        if (res.reason === 'signin') {
+          this.saveState = 'signin';
           return;
         }
         if (res.reason !== 'conflict') {
           this.saveState = 'error';
           this.flashNotice(
-            res.reason === 'missing' ? 'This file no longer exists.' : 'Could not save: storage is full or blocked.',
+            res.reason === 'missing'
+              ? 'This file no longer exists.'
+              : `Could not save: ${res.message ?? 'storage is full or blocked.'}`,
           );
           return;
         }
-        const doc = await fileStore.load(f.id);
+        let doc: FileDoc | null = null;
+        try {
+          doc = await fileStore.load(f.id);
+        } catch {
+          this.saveState = 'offline';
+          this.saveTimer = setTimeout(() => this.flush(), 5_000);
+          return;
+        }
         if (!doc) return;
         this.absorb(doc);
       }

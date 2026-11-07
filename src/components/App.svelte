@@ -7,22 +7,35 @@
   import Inspector from './Inspector.svelte';
   import StatusBar from './StatusBar.svelte';
   import Home from './Home.svelte';
-  import { isFileKey, isSnapshotKey } from '../lib/files';
+  import Login from './Login.svelte';
+  import { fileStore } from '../lib/files';
+  import { session } from '../lib/session.svelte';
 
   /**
    * Each window shows its file in the address: #/f/<id>, or #/f/<id>/s/<snapshotId>
    * for a read-only snapshot. So windows can hold different files, or the same one.
    */
-  let view = $state<'loading' | 'home' | 'file' | 'missing'>('loading');
+  let view = $state<'loading' | 'home' | 'file' | 'missing' | 'offline'>('loading');
 
   async function route() {
+    if (session.mode === 'checking' || !session.signedIn) return;
     const m = location.hash.match(/^#\/f\/([\w-]+)(?:\/s\/([\w-]+))?/);
-    if (!m) {
-      await app.close();
-      view = 'home';
-      return;
+    try {
+      if (!m) {
+        await app.close();
+        view = 'home';
+        return;
+      }
+      view = (await app.open(m[1], m[2] ?? null)) ? 'file' : 'missing';
+    } catch {
+      view = session.signedIn ? 'offline' : view;
     }
-    view = (await app.open(m[1], m[2] ?? null)) ? 'file' : 'missing';
+  }
+
+  /** After signing in (again): show the page, and save anything that was waiting. */
+  function afterSignIn() {
+    if (view === 'file' && app.file) app.flush();
+    else route();
   }
 
   $effect(() => {
@@ -113,13 +126,25 @@
   onMount(() => {
     const flush = () => app.flush();
     const refresh = () => app.refreshMonths();
-    const onStorage = (e: StorageEvent) => {
-      if (app.file && isSnapshotKey(e.key, app.file.id)) app.refreshSnapshots();
-      else if (isFileKey(e.key)) app.onExternalChange();
+    let unwatch = () => {};
+    // Unsaved edits that the server hasn't confirmed: ask before closing the window.
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (fileStore.kind === 'remote' && app.unsaved) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
     };
-    route();
+    session.init().then(() => {
+      unwatch = fileStore.watch((e) => {
+        if (!app.file || e.kind === 'list') return;
+        if (e.id !== app.file.id) return;
+        if (e.kind === 'snapshots') app.refreshSnapshots();
+        else app.onExternalChange();
+      });
+      route();
+    });
     window.addEventListener('hashchange', route);
-    window.addEventListener('storage', onStorage);
+    window.addEventListener('beforeunload', onBeforeUnload);
     window.addEventListener('pagehide', flush);
     window.addEventListener('focus', refresh);
     document.addEventListener('visibilitychange', () => {
@@ -127,8 +152,9 @@
       else refresh();
     });
     return () => {
+      unwatch();
       window.removeEventListener('hashchange', route);
-      window.removeEventListener('storage', onStorage);
+      window.removeEventListener('beforeunload', onBeforeUnload);
       window.removeEventListener('pagehide', flush);
       window.removeEventListener('focus', refresh);
     };
@@ -138,12 +164,23 @@
 <svelte:window onkeydown={onKeydown} />
 <svelte:document oncopy={onCopy} oncut={onCut} onpaste={onPaste} />
 
-{#if view === 'home'}
+{#if session.mode === 'remote' && !session.signedIn && (view === 'loading' || view === 'home' || view === 'offline')}
+  <Login onsignedin={afterSignIn} />
+{:else if view === 'home'}
   <Home />
 {:else if view === 'missing'}
   <div class="missing">
-    <p>This file doesn't exist in this browser. It may have been deleted, or it was made on another device.</p>
+    <p>
+      {session.mode === 'remote'
+        ? "This file doesn't exist. It may have been deleted."
+        : "This file doesn't exist in this browser. It may have been deleted, or it was made on another device."}
+    </p>
     <a href="#/">‹ All files</a>
+  </div>
+{:else if view === 'offline'}
+  <div class="missing">
+    <p>Can't reach the server. Check the connection and try again.</p>
+    <button onclick={route}>Try again</button>
   </div>
 {:else if view === 'file' && app.file}
   <div class="shell">
@@ -157,6 +194,9 @@
     </div>
     <StatusBar />
   </div>
+  {#if session.mode === 'remote' && !session.signedIn}
+    <Login overlay onsignedin={afterSignIn} />
+  {/if}
 {/if}
 
 <style>
