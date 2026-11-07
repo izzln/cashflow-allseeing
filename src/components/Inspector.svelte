@@ -80,7 +80,7 @@
     <li>Drag to select; Shift extends; ⌘ adds more cells. Sum and average show bottom right.</li>
     <li>iPad: tap a cell to select, tap again to edit, drag from a selected cell to extend.</li>
     <li>Copy/paste works with Excel and Numbers. Pasting past the last row adds rows.</li>
-    <li>Data is saved in this browser only for now. Use Backup to keep a copy.</li>
+    <li>Files are saved in this browser for now. Use Download to keep a snapshot.</li>
   </ul>
 </aside>
 

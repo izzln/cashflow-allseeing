@@ -6,12 +6,13 @@ import {
   newRow,
   newSheet,
   newTable,
-  normalizeWorkbook,
   starterWorkbook,
   type Table,
   type Workbook,
 } from './model';
 import { visibleWindow } from './months';
+import { downloadText } from './download';
+import { fileStore, snapshotFilename, toSnapshot, type FileMeta } from './files';
 import {
   bounds,
   cellValue,
@@ -25,8 +26,7 @@ import {
   type Range,
 } from './grid';
 
-const KEY = 'cashflow-allseeing.workbook.v1';
-const SHEET_KEY = 'cashflow-allseeing.activeSheet';
+const SHEET_KEY = 'cashflow-allseeing.activeSheet.';
 const MAX_HISTORY = 200;
 
 export const LABEL_W = 200;
@@ -57,19 +57,6 @@ function writeStorage(key: string, value: string) {
   }
 }
 
-function loadWorkbook(): Workbook {
-  const raw = readStorage(KEY);
-  if (raw) {
-    try {
-      const wb = normalizeWorkbook(JSON.parse(raw));
-      if (wb) return wb;
-    } catch {
-      // Fall through to a fresh workbook.
-    }
-  }
-  return starterWorkbook();
-}
-
 export function tableWidth(months: number): number {
   return LABEL_W + months * COL_W;
 }
@@ -83,7 +70,11 @@ function snap(v: number): number {
 }
 
 class AppState {
-  wb = $state<Workbook>(loadWorkbook());
+  wb = $state<Workbook>(starterWorkbook());
+  /** The open file, or null on the file list. */
+  file = $state<FileMeta | null>(null);
+  /** 'conflict': another window saved this file since we loaded it. */
+  saveState = $state<'saved' | 'pending' | 'conflict' | 'error'>('saved');
   activeSheetId = $state('');
   selection = $state<Selection | null>(null);
   /** Table shown in the inspector (set by clicking a title or a cell). */
@@ -101,11 +92,6 @@ class AppState {
   private undoStack: Workbook[] = [];
   private redoStack: Workbook[] = [];
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
-
-  constructor() {
-    const saved = readStorage(SHEET_KEY);
-    this.activeSheetId = this.wb.sheets.some((s) => s.id === saved) ? saved! : this.wb.sheets[0].id;
-  }
 
   get sheet() {
     return this.wb.sheets.find((s) => s.id === this.activeSheetId) ?? this.wb.sheets[0];
@@ -172,29 +158,129 @@ class AppState {
     this.canRedo = this.redoStack.length > 0;
   }
 
-  save() {
-    if (this.saveTimer) clearTimeout(this.saveTimer);
-    this.saveTimer = setTimeout(() => this.flush(), 250);
+  // ---------- files ----------
+
+  /** Load a file into the editor. Returns false if it does not exist. */
+  async open(id: string): Promise<boolean> {
+    if (this.file?.id === id) return true;
+    await this.close();
+    const doc = await fileStore.load(id);
+    if (!doc) return false;
+    this.load(doc.meta, doc.wb);
+    return true;
   }
 
-  flush() {
-    if (this.saveTimer) clearTimeout(this.saveTimer);
-    this.saveTimer = null;
-    writeStorage(KEY, JSON.stringify($state.snapshot(this.wb)));
-    writeStorage(SHEET_KEY, this.activeSheetId);
+  private load(meta: FileMeta, wb: Workbook) {
+    this.file = meta;
+    this.wb = wb;
+    const saved = readStorage(SHEET_KEY + meta.id);
+    this.activeSheetId = wb.sheets.some((s) => s.id === saved) ? saved! : wb.sheets[0].id;
+    this.undoStack = [];
+    this.redoStack = [];
+    this.syncHistoryFlags();
+    this.selection = null;
+    this.focusTableId = null;
+    this.editing = null;
+    this.saveState = 'saved';
+    this.refreshMonths();
   }
 
-  replaceWorkbook(wb: Workbook) {
-    this.change(() => {
-      this.wb = wb;
-    });
-    this.activeSheetId = wb.sheets[0].id;
+  async close() {
+    if (!this.file) return;
+    this.commitEdit();
+    await this.flush();
+    this.file = null;
     this.selection = null;
     this.focusTableId = null;
   }
 
-  exportJSON(): string {
-    return JSON.stringify($state.snapshot(this.wb), null, 2);
+  async renameFile(name: string) {
+    const n = name.trim();
+    if (!this.file || !n) return;
+    await fileStore.rename(this.file.id, n);
+    this.file.name = n;
+  }
+
+  /** Another window changed storage: pick up its version if we have nothing unsaved. */
+  async onExternalChange() {
+    const f = this.file;
+    if (!f) return;
+    const doc = await fileStore.load(f.id);
+    if (!doc) {
+      this.saveState = 'error';
+      this.flashNotice('This file was deleted in another window.');
+      return;
+    }
+    if (doc.meta.rev === f.rev) {
+      f.name = doc.meta.name;
+      return;
+    }
+    if (this.saveState === 'saved') {
+      this.load(doc.meta, doc.wb);
+      this.flashNotice('Updated with changes from another window.');
+    } else {
+      this.saveState = 'conflict';
+    }
+  }
+
+  /** After a conflict: take the other window's version, or overwrite it with ours. */
+  async resolveConflict(choice: 'theirs' | 'mine') {
+    const f = this.file;
+    if (!f) return;
+    if (choice === 'theirs') {
+      const doc = await fileStore.load(f.id);
+      if (doc) this.load(doc.meta, doc.wb);
+      return;
+    }
+    this.saveState = 'pending';
+    await this.flush(true);
+  }
+
+  downloadSnapshot() {
+    if (!this.file) return;
+    const snap = toSnapshot(this.file.name, $state.snapshot(this.wb) as Workbook);
+    downloadText(snapshotFilename(this.file.name), JSON.stringify(snap, null, 2));
+  }
+
+  private changeSeq = 0;
+
+  save() {
+    if (!this.file) return;
+    this.changeSeq++;
+    if (this.saveState !== 'conflict') this.saveState = 'pending';
+    if (this.saveTimer) clearTimeout(this.saveTimer);
+    this.saveTimer = setTimeout(() => this.flush(), 250);
+  }
+
+  private saving: Promise<void> = Promise.resolve();
+
+  /** Write pending changes now. Saves run one at a time, in order. */
+  flush(force = false): Promise<void> {
+    if (this.saveTimer) clearTimeout(this.saveTimer);
+    this.saveTimer = null;
+    const f = this.file;
+    if (!f) return this.saving;
+    writeStorage(SHEET_KEY + f.id, this.activeSheetId);
+    if (this.saveState === 'saved' || (this.saveState === 'conflict' && !force)) return this.saving;
+    const wb = $state.snapshot(this.wb) as Workbook;
+    const seq = this.changeSeq;
+    const run = async () => {
+      if (this.file?.id !== f.id) return;
+      const res = await fileStore.save(f.id, wb, f.rev, force);
+      if (res.ok) {
+        f.rev = res.meta.rev;
+        f.updatedAt = res.meta.updatedAt;
+        // Still 'pending' if more edits arrived while this save was running.
+        if (this.changeSeq === seq) this.saveState = 'saved';
+      } else if (res.reason === 'conflict') {
+        this.saveState = 'conflict';
+      } else {
+        this.saveState = 'error';
+        this.flashNotice(res.reason === 'missing' ? 'This file no longer exists.' : 'Could not save: storage is full or blocked.');
+      }
+    };
+    this.saving = this.saving.then(run, run);
+    return this.saving;
   }
 
   // ---------- sheets ----------
@@ -204,7 +290,7 @@ class AppState {
     this.activeSheetId = id;
     this.selection = null;
     this.focusTableId = null;
-    this.save();
+    if (this.file) writeStorage(SHEET_KEY + this.file.id, id);
   }
 
   addSheet() {

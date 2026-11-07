@@ -15,13 +15,24 @@ sheets as tabs along the top, several tables per sheet placed on a canvas, month
 - Multi-cell selection (drag, Shift, ⌘/Ctrl) with Sum / Average / Count at bottom right
 - Cell color presets
 - Copy/paste with Excel and Numbers (tab-separated text; pasting past the last row adds rows)
-- Undo/redo, autosave in the browser, JSON backup/restore
+- Undo/redo and autosave
 - Works with mouse and keyboard (Mac) and touch (iPad)
+
+**Files**
+- The app opens on a file list: create, open, rename, duplicate, download, delete
+- Each file is one workbook with its own sheets and tables, and its own address (`#/f/<id>`),
+  so separate windows can work on separate files
+- **Download** saves a dated snapshot (`<name> YYYY-MM-DD.json`). **Open snapshot** always creates a
+  new file and never overwrites one
+- If the same file is open in two windows, an idle window picks up the other's changes. If both edit
+  at once, the second save is refused and you choose which version to keep
 
 **Next**
 - Phase 2: ledger tables (date, amount, category, note), CSV/Excel import, row data sources with filters, formula rows
-- Phase 3: backend, sync between devices, view-only share links, hosting
+- Phase 3: Cloudflare backend (Workers + D1), files synced between devices, login for editing;
+  the `FileStore` interface in `src/lib/files.ts` gets a server-backed implementation
 - Phase 4: Feishu and Huoban connectors with scheduled sync
+- Last: view-only share links
 
 ## Development
 
@@ -35,8 +46,8 @@ npm run build    # production build in dist/
 
 Stack: Vite + TypeScript + Svelte 5. No UI or spreadsheet libraries.
 
-## Data storage (phase 1)
+## Data storage (until phase 3)
 
-Data lives in the browser's local storage on each device. It does not sync between devices yet.
+Files live in the browser's local storage on each device and do not sync between devices yet.
 Safari may clear site data for sites you haven't visited in 7 days unless the app is added to the
-Home Screen, so use **Backup** regularly until phase 3 adds a server copy.
+Home Screen, so download snapshots regularly until phase 3 adds a server copy.

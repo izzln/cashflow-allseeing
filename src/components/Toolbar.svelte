@@ -1,10 +1,8 @@
 <script lang="ts">
   import { app } from '../lib/store.svelte';
-  import { normalizeWorkbook } from '../lib/model';
   import { STYLES } from '../lib/styles';
 
   let { showInspector = $bindable() }: { showInspector: boolean } = $props();
-  let fileEl = $state<HTMLInputElement | null>(null);
 
   const tableId = $derived(app.selection?.tableId ?? app.focusTableId);
   const hasSel = $derived(!!app.selection);
@@ -37,29 +35,6 @@
     }
   }
 
-  function backup() {
-    const blob = new Blob([app.exportJSON()], { type: 'application/json' });
-    const a = document.createElement('a');
-    const d = new Date();
-    const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
-    a.href = URL.createObjectURL(blob);
-    a.download = `cashflow-backup-${stamp}.json`;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-  }
-
-  async function restore(e: Event) {
-    const file = (e.target as HTMLInputElement).files?.[0];
-    (e.target as HTMLInputElement).value = '';
-    if (!file) return;
-    try {
-      const wb = normalizeWorkbook(JSON.parse(await file.text()));
-      if (!wb) throw new Error('bad');
-      if (confirm('Replace the current workbook with this backup? (You can undo.)')) app.replaceWorkbook(wb);
-    } catch {
-      alert('That file is not a valid backup.');
-    }
-  }
 </script>
 
 <div class="toolbar">
@@ -90,9 +65,7 @@
     <button onclick={paste} disabled={!hasSel}>Paste</button>
   </div>
   <div class="group right">
-    <button onclick={backup} title="Download all data as a file">Backup</button>
-    <button onclick={() => fileEl?.click()} title="Load a backup file">Restore</button>
-    <input bind:this={fileEl} type="file" accept="application/json,.json" hidden onchange={restore} />
+    <button onclick={() => app.downloadSnapshot()} title="Download a snapshot of this file">Download</button>
     <button onclick={() => (showInspector = !showInspector)} class:on={showInspector}>Panel</button>
   </div>
 </div>

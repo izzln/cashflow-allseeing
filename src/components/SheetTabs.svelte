@@ -24,13 +24,28 @@
     renaming = null;
   }
 
+  const STATE_LABEL = {
+    saved: 'Saved',
+    pending: 'Saving…',
+    conflict: 'Not saved',
+    error: 'Not saved',
+  } as const;
+
+  function renameFile() {
+    const n = prompt('File name', app.file?.name ?? '');
+    if (n) app.renameFile(n);
+  }
+
   function remove(id: string, name: string) {
     if (confirm(`Delete sheet "${name}" and all its tables?`)) app.deleteSheet(id);
   }
 </script>
 
 <nav class="tabs">
-  <span class="brand">Cashflow</span>
+  <a class="back" href="#/" title="All files">‹ Files</a>
+  <button class="file" onclick={renameFile} title="Rename file">{app.file?.name}</button>
+  <span class="state {app.saveState}">{STATE_LABEL[app.saveState]}</span>
+  <span class="sep"></span>
   {#each app.wb.sheets as s (s.id)}
     <div class="tab" class:active={s.id === app.activeSheetId}>
       {#if renaming === s.id}
@@ -69,10 +84,36 @@
     overflow-x: auto;
     flex-shrink: 0;
   }
-  .brand {
-    font-weight: 600;
-    margin-right: 10px;
+  .back {
+    color: var(--accent);
+    text-decoration: none;
     white-space: nowrap;
+    padding: 4px 6px;
+  }
+  .file {
+    border: none;
+    background: transparent;
+    font-weight: 600;
+    white-space: nowrap;
+    max-width: 240px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .state {
+    color: var(--muted);
+    font-size: 12px;
+    white-space: nowrap;
+    min-width: 56px;
+  }
+  .state.conflict,
+  .state.error {
+    color: var(--neg);
+  }
+  .sep {
+    width: 1px;
+    align-self: stretch;
+    background: var(--line);
+    margin: 2px 8px;
   }
   .tab {
     display: flex;
