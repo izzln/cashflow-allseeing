@@ -1,17 +1,36 @@
 import { normalizeWorkbook, starterWorkbook, uid, type Workbook } from './model';
+import { addMonths, currentMonth, isMonthKey, monthLabel, parseMonth, type MonthKey } from './months';
 
-/** One cash-flow file: a workbook with its own sheets and tables. */
+/** One cash-flow file: a workbook with its own sheets, tables and snapshots. */
 export interface FileMeta {
   id: string;
   name: string;
   createdAt: number;
+  /** Last time the content was saved (renames don't count). */
   updatedAt: number;
-  /** Goes up by one on every save. Used to catch edits from another window. */
+  /** Goes up by one on every content save. */
   rev: number;
+  /** The last month that already has its month-end snapshot. */
+  monthEndDone?: MonthKey;
 }
 
 export interface FileDoc {
   meta: FileMeta;
+  wb: Workbook;
+}
+
+/** A frozen copy of a file's content, kept inside the file. */
+export interface SnapshotMeta {
+  id: string;
+  label: string;
+  kind: 'manual' | 'month-end';
+  /** The month the snapshot represents; its view starts at this month. */
+  asOf: MonthKey;
+  takenAt: number;
+}
+
+export interface SnapshotDoc {
+  meta: SnapshotMeta;
   wb: Workbook;
 }
 
@@ -21,18 +40,25 @@ export type SaveResult =
   | { ok: false; reason: 'missing' | 'storage' };
 
 /**
- * Where files live. Phase 1 keeps them in browser storage; phase 3 adds a
- * Cloudflare-backed implementation with the same shape.
+ * Where files live. Today: browser storage. Phase 3 adds a Cloudflare-backed
+ * implementation with the same shape (the month-end rule then runs on the server).
  */
 export interface FileStore {
   list(): Promise<FileMeta[]>;
   load(id: string): Promise<FileDoc | null>;
-  create(name: string, wb?: Workbook): Promise<FileMeta>;
-  /** Save only if the stored rev still equals baseRev, unless force is set. */
-  save(id: string, wb: Workbook, baseRev: number, force?: boolean): Promise<SaveResult>;
+  create(name: string, wb?: Workbook, snapshots?: SnapshotDoc[]): Promise<FileMeta>;
+  /** Save only if the stored rev still equals baseRev. On 'conflict', load, merge and retry. */
+  save(id: string, wb: Workbook, baseRev: number): Promise<SaveResult>;
   rename(id: string, name: string): Promise<void>;
   duplicate(id: string): Promise<FileMeta | null>;
   remove(id: string): Promise<void>;
+  listSnapshots(id: string): Promise<SnapshotMeta[]>;
+  loadSnapshot(id: string, snapId: string): Promise<SnapshotDoc | null>;
+  /** Freeze the saved content now. */
+  takeSnapshot(id: string, label: string): Promise<SnapshotMeta>;
+  deleteSnapshot(id: string, snapId: string): Promise<void>;
+  /** Take the month-end snapshot if a month has ended since the last one. */
+  ensureMonthEnd(id: string, now?: Date): Promise<SnapshotMeta | null>;
 }
 
 /** The subset of the Web Storage API we use, so tests can pass a fake. */
@@ -49,27 +75,51 @@ const LEGACY_KEY = `${PREFIX}workbook.v1`;
 export function fileKey(id: string): string {
   return `${PREFIX}file.${id}`;
 }
+const snapIndexKey = (id: string) => `${fileKey(id)}.snaps`;
+const snapKey = (id: string, sid: string) => `${fileKey(id)}.snap.${sid}`;
 
 export function isFileKey(key: string | null): boolean {
   return !!key && (key.startsWith(`${PREFIX}file.`) || key === INDEX_KEY);
 }
 
+export function isSnapshotKey(key: string | null, fileId: string): boolean {
+  return !!key && key.startsWith(`${fileKey(fileId)}.snap`);
+}
+
+export function monthName(k: MonthKey): string {
+  return `${monthLabel(k)} ${parseMonth(k).year}`;
+}
+
+function monthOf(ts: number): MonthKey {
+  return currentMonth(new Date(ts));
+}
+
+/** Stable storage keys use the file id; written without awaits so writes finish synchronously. */
 export class LocalFileStore implements FileStore {
   constructor(private kv: KV) {
     this.migrateLegacy();
   }
 
-  private readIndex(): FileMeta[] {
+  private readJSON<T>(key: string, fallback: T): T {
     try {
-      const raw = JSON.parse(this.kv.getItem(INDEX_KEY) ?? '[]');
-      return Array.isArray(raw) ? raw : [];
+      const raw = this.kv.getItem(key);
+      return raw === null ? fallback : (JSON.parse(raw) as T);
     } catch {
-      return [];
+      return fallback;
     }
+  }
+
+  private readIndex(): FileMeta[] {
+    const list = this.readJSON<FileMeta[]>(INDEX_KEY, []);
+    return Array.isArray(list) ? list : [];
   }
 
   private writeIndex(list: FileMeta[]) {
     this.kv.setItem(INDEX_KEY, JSON.stringify(list));
+  }
+
+  private meta(id: string): FileMeta | undefined {
+    return this.readIndex().find((m) => m.id === id);
   }
 
   private patchMeta(id: string, patch: Partial<FileMeta>): FileMeta | null {
@@ -81,23 +131,38 @@ export class LocalFileStore implements FileStore {
     return list[i];
   }
 
+  private readWorkbook(key: string): Workbook | null {
+    return normalizeWorkbook(this.readJSON<unknown>(key, null));
+  }
+
   /** Phase 1 kept a single workbook; turn it into the first file. */
   private migrateLegacy() {
     const raw = this.kv.getItem(LEGACY_KEY);
     if (raw === null) return;
     try {
       const wb = normalizeWorkbook(JSON.parse(raw));
-      if (wb) this.createSync('My cash flow', wb);
+      if (wb) this.createSync('My cash flow', wb, []);
       this.kv.removeItem(LEGACY_KEY);
     } catch {
       // Leave the old data in place if it cannot be read.
     }
   }
 
-  private createSync(name: string, wb: Workbook): FileMeta {
+  private createSync(name: string, wb: Workbook, snapshots: SnapshotDoc[]): FileMeta {
     const now = Date.now();
     const meta: FileMeta = { id: uid(), name, createdAt: now, updatedAt: now, rev: 1 };
     this.kv.setItem(fileKey(meta.id), JSON.stringify(wb));
+    if (snapshots.length) {
+      for (const s of snapshots) this.kv.setItem(snapKey(meta.id, s.meta.id), JSON.stringify(s.wb));
+      this.kv.setItem(snapIndexKey(meta.id), JSON.stringify(snapshots.map((s) => s.meta)));
+      // Don't re-freeze months the imported file already covered.
+      const done = snapshots
+        .filter((s) => s.meta.kind === 'month-end')
+        .map((s) => s.meta.asOf)
+        .sort()
+        .pop();
+      if (done) meta.monthEndDone = done;
+    }
     this.writeIndex([...this.readIndex(), meta]);
     return meta;
   }
@@ -107,28 +172,22 @@ export class LocalFileStore implements FileStore {
   }
 
   async load(id: string) {
-    const meta = this.readIndex().find((m) => m.id === id);
-    const raw = this.kv.getItem(fileKey(id));
-    if (!meta || raw === null) return null;
-    try {
-      const wb = normalizeWorkbook(JSON.parse(raw));
-      return wb ? { meta, wb } : null;
-    } catch {
-      return null;
-    }
+    const meta = this.meta(id);
+    const wb = meta ? this.readWorkbook(fileKey(id)) : null;
+    return meta && wb ? { meta, wb } : null;
   }
 
-  async create(name: string, wb: Workbook = starterWorkbook()) {
-    return this.createSync(name, wb);
+  async create(name: string, wb: Workbook = starterWorkbook(), snapshots: SnapshotDoc[] = []) {
+    return this.createSync(name, wb, snapshots);
   }
 
-  // Written without awaits so the write finishes synchronously, which keeps
-  // saves on page close reliable.
-  async save(id: string, wb: Workbook, baseRev: number, force = false): Promise<SaveResult> {
-    const current = this.readIndex().find((m) => m.id === id);
+  async save(id: string, wb: Workbook, baseRev: number): Promise<SaveResult> {
+    const current = this.meta(id);
     if (!current) return { ok: false, reason: 'missing' };
-    if (!force && current.rev !== baseRev) return { ok: false, reason: 'conflict', current };
+    if (current.rev !== baseRev) return { ok: false, reason: 'conflict', current };
     try {
+      // Freeze last month's content before the first change of a new month.
+      this.monthEndSync(id);
       this.kv.setItem(fileKey(id), JSON.stringify(wb));
     } catch {
       return { ok: false, reason: 'storage' };
@@ -139,64 +198,175 @@ export class LocalFileStore implements FileStore {
 
   async rename(id: string, name: string) {
     const n = name.trim();
-    if (n) this.patchMeta(id, { name: n, updatedAt: Date.now() });
+    if (n) this.patchMeta(id, { name: n });
   }
 
   async duplicate(id: string) {
     const doc = await this.load(id);
-    return doc ? this.createSync(`${doc.meta.name} copy`, doc.wb) : null;
+    if (!doc) return null;
+    const snaps = (await this.listSnapshots(id))
+      .map((m) => ({ meta: m, wb: this.readWorkbook(snapKey(id, m.id)) }))
+      .filter((s): s is SnapshotDoc => !!s.wb);
+    return this.createSync(`${doc.meta.name} copy`, doc.wb, snaps);
   }
 
   async remove(id: string) {
+    for (const s of await this.listSnapshots(id)) this.kv.removeItem(snapKey(id, s.id));
+    this.kv.removeItem(snapIndexKey(id));
     this.kv.removeItem(fileKey(id));
     this.writeIndex(this.readIndex().filter((m) => m.id !== id));
   }
+
+  async listSnapshots(id: string) {
+    const list = this.readJSON<SnapshotMeta[]>(snapIndexKey(id), []);
+    return (Array.isArray(list) ? list : []).sort((a, b) => b.takenAt - a.takenAt);
+  }
+
+  async loadSnapshot(id: string, snapId: string) {
+    const meta = (await this.listSnapshots(id)).find((s) => s.id === snapId);
+    const wb = meta ? this.readWorkbook(snapKey(id, snapId)) : null;
+    return meta && wb ? { meta, wb } : null;
+  }
+
+  private addSnapshot(id: string, meta: SnapshotMeta, wb: Workbook) {
+    this.kv.setItem(snapKey(id, meta.id), JSON.stringify(wb));
+    const list = this.readJSON<SnapshotMeta[]>(snapIndexKey(id), []);
+    this.kv.setItem(snapIndexKey(id), JSON.stringify([...list, meta]));
+  }
+
+  async takeSnapshot(id: string, label: string, now = new Date()) {
+    const wb = this.readWorkbook(fileKey(id));
+    if (!wb) throw new Error('File not found');
+    const meta: SnapshotMeta = {
+      id: uid(),
+      label: label.trim() || `Snapshot ${now.toLocaleDateString()}`,
+      kind: 'manual',
+      asOf: currentMonth(now),
+      takenAt: now.getTime(),
+    };
+    this.addSnapshot(id, meta, wb);
+    return meta;
+  }
+
+  async deleteSnapshot(id: string, snapId: string) {
+    this.kv.removeItem(snapKey(id, snapId));
+    const list = this.readJSON<SnapshotMeta[]>(snapIndexKey(id), []);
+    this.kv.setItem(snapIndexKey(id), JSON.stringify(list.filter((s) => s.id !== snapId)));
+  }
+
+  async ensureMonthEnd(id: string, now = new Date()) {
+    return this.monthEndSync(id, now);
+  }
+
+  /**
+   * The saved content is unchanged since its last save, so if that save was
+   * before this month, it is exactly the content at last month's end.
+   */
+  private monthEndSync(id: string, now = new Date()): SnapshotMeta | null {
+    const meta = this.meta(id);
+    if (!meta) return null;
+    const lastEnded = addMonths(currentMonth(now), -1);
+    if (monthOf(meta.createdAt) > lastEnded) return null; // no month has ended yet for this file
+    if (meta.monthEndDone && meta.monthEndDone >= lastEnded) return null;
+    const wb = this.readWorkbook(fileKey(id));
+    if (!wb) return null;
+    const snap: SnapshotMeta = {
+      id: uid(),
+      label: `End of ${monthName(lastEnded)}`,
+      kind: 'month-end',
+      asOf: lastEnded,
+      takenAt: now.getTime(),
+    };
+    this.addSnapshot(id, snap, wb);
+    this.patchMeta(id, { monthEndDone: lastEnded });
+    return snap;
+  }
 }
 
-// ---------- snapshots (downloaded files) ----------
+// ---------- downloaded files ----------
 
-export const SNAPSHOT_FORMAT = 'cashflow-allseeing';
+export const EXPORT_FORMAT = 'cashflow-allseeing';
 
-export interface Snapshot {
-  format: typeof SNAPSHOT_FORMAT;
-  version: 1;
+export interface ExportFile {
+  format: typeof EXPORT_FORMAT;
+  version: 2;
   name: string;
   exportedAt: string;
   workbook: Workbook;
+  snapshots: { meta: SnapshotMeta; workbook: Workbook }[];
 }
 
-export function toSnapshot(name: string, wb: Workbook, now = new Date()): Snapshot {
-  return { format: SNAPSHOT_FORMAT, version: 1, name, exportedAt: now.toISOString(), workbook: wb };
+export function toExport(
+  name: string,
+  wb: Workbook,
+  snapshots: SnapshotDoc[] = [],
+  now = new Date(),
+): ExportFile {
+  return {
+    format: EXPORT_FORMAT,
+    version: 2,
+    name,
+    exportedAt: now.toISOString(),
+    workbook: wb,
+    snapshots: snapshots.map((s) => ({ meta: s.meta, workbook: s.wb })),
+  };
 }
 
-/** Read a downloaded snapshot. Also accepts a bare workbook (phase 1 backups). */
-export function fromSnapshot(
+function normalizeSnapshotMeta(raw: any): SnapshotMeta | null {
+  if (!raw || typeof raw !== 'object') return null;
+  return {
+    id: String(raw.id ?? uid()),
+    label: String(raw.label ?? 'Snapshot'),
+    kind: raw.kind === 'month-end' ? 'month-end' : 'manual',
+    asOf: isMonthKey(raw.asOf) ? raw.asOf : currentMonth(),
+    takenAt: Number(raw.takenAt) || Date.now(),
+  };
+}
+
+/** Read a downloaded file. Also accepts the earlier formats (v1 and bare workbooks). */
+export function fromExport(
   raw: unknown,
   fallbackName: string,
-): { name: string; wb: Workbook; exportedAt?: string } | null {
-  if (raw && typeof raw === 'object' && (raw as Snapshot).format === SNAPSHOT_FORMAT) {
-    const s = raw as Snapshot;
-    const wb = normalizeWorkbook(s.workbook);
-    const exportedAt = typeof s.exportedAt === 'string' ? s.exportedAt.slice(0, 10) : undefined;
-    return wb ? { name: String(s.name || fallbackName), wb, exportedAt } : null;
+): { name: string; wb: Workbook; snapshots: SnapshotDoc[]; exportedAt?: string } | null {
+  if (raw && typeof raw === 'object' && (raw as ExportFile).format === EXPORT_FORMAT) {
+    const f = raw as ExportFile;
+    const wb = normalizeWorkbook(f.workbook);
+    if (!wb) return null;
+    const snapshots = (Array.isArray(f.snapshots) ? f.snapshots : [])
+      .map((s) => ({ meta: normalizeSnapshotMeta(s?.meta), wb: normalizeWorkbook(s?.workbook) }))
+      .filter((s): s is SnapshotDoc => !!s.meta && !!s.wb);
+    const exportedAt = typeof f.exportedAt === 'string' ? f.exportedAt.slice(0, 10) : undefined;
+    return { name: String(f.name || fallbackName), wb, snapshots, exportedAt };
   }
   const wb = normalizeWorkbook(raw);
-  return wb ? { name: fallbackName, wb } : null;
+  return wb ? { name: fallbackName, wb, snapshots: [] } : null;
 }
 
-/** Name for a reopened snapshot, so it can't be mistaken for the file it came from. */
+/** Name for an imported file, so it can't be mistaken for the file it came from. */
 export function importedName(name: string, existing: string[], exportedAt?: string): string {
   if (!existing.includes(name)) return name;
-  const base = `${name} (snapshot${exportedAt ? ` ${exportedAt}` : ''})`;
+  const base = `${name} (copy${exportedAt ? ` ${exportedAt}` : ''})`;
   let n = base;
   for (let i = 2; existing.includes(n); i++) n = `${base} ${i}`;
   return n;
 }
 
-export function snapshotFilename(name: string, now = new Date()): string {
+export function exportFilename(name: string, now = new Date()): string {
   const d = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
   const safe = name.replace(/[\\/:*?"<>|]+/g, '-').trim() || 'cashflow';
   return `${safe} ${d}.json`;
+}
+
+/** Everything needed to download a file, including its snapshots. */
+export async function buildExport(store: FileStore, id: string): Promise<ExportFile | null> {
+  const doc = await store.load(id);
+  if (!doc) return null;
+  const snaps: SnapshotDoc[] = [];
+  for (const m of await store.listSnapshots(id)) {
+    const s = await store.loadSnapshot(id, m.id);
+    if (s) snaps.push(s);
+  }
+  return toExport(doc.meta.name, doc.wb, snaps);
 }
 
 // ---------- the store used by the app ----------

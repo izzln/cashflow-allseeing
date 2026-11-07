@@ -1,6 +1,12 @@
 <script lang="ts">
   import { app } from '../lib/store.svelte';
   import { STYLES } from '../lib/styles';
+  import SnapshotsMenu from './SnapshotsMenu.svelte';
+
+  async function toNewFile() {
+    const id = await app.snapshotToNewFile();
+    if (id) location.hash = `#/f/${id}`;
+  }
 
   let { showInspector = $bindable() }: { showInspector: boolean } = $props();
 
@@ -38,6 +44,7 @@
 </script>
 
 <div class="toolbar">
+  {#if !app.readonly}
   <div class="group">
     <button onclick={() => app.undo()} disabled={!app.canUndo} title="Undo (⌘Z)">↶ Undo</button>
     <button onclick={() => app.redo()} disabled={!app.canRedo} title="Redo (⇧⌘Z)">↷ Redo</button>
@@ -60,12 +67,17 @@
       >
     {/each}
   </div>
+  {/if}
   <div class="group">
     <button onclick={copy} disabled={!hasSel}>Copy</button>
-    <button onclick={paste} disabled={!hasSel}>Paste</button>
+    {#if !app.readonly}<button onclick={paste} disabled={!hasSel}>Paste</button>{/if}
   </div>
   <div class="group right">
-    <button onclick={() => app.downloadSnapshot()} title="Download a snapshot of this file">Download</button>
+    {#if app.readonly}
+      <button onclick={toNewFile} title="Make an editable file from this snapshot">Save as new file</button>
+    {/if}
+    <SnapshotsMenu />
+    <button onclick={() => app.downloadFile()} title="Download this file, with its snapshots">Download</button>
     <button onclick={() => (showInspector = !showInspector)} class:on={showInspector}>Panel</button>
   </div>
 </div>

@@ -7,29 +7,29 @@
   import Inspector from './Inspector.svelte';
   import StatusBar from './StatusBar.svelte';
   import Home from './Home.svelte';
-  import ConflictBanner from './ConflictBanner.svelte';
-  import { isFileKey } from '../lib/files';
+  import { isFileKey, isSnapshotKey } from '../lib/files';
 
-  /** Each window shows the file in its address (#/f/<id>), so windows can hold different files. */
+  /**
+   * Each window shows its file in the address: #/f/<id>, or #/f/<id>/s/<snapshotId>
+   * for a read-only snapshot. So windows can hold different files, or the same one.
+   */
   let view = $state<'loading' | 'home' | 'file' | 'missing'>('loading');
 
-  function fileIdFromHash(): string | null {
-    const m = location.hash.match(/^#\/f\/([\w-]+)/);
-    return m ? m[1] : null;
-  }
-
   async function route() {
-    const id = fileIdFromHash();
-    if (!id) {
+    const m = location.hash.match(/^#\/f\/([\w-]+)(?:\/s\/([\w-]+))?/);
+    if (!m) {
       await app.close();
       view = 'home';
       return;
     }
-    view = (await app.open(id)) ? 'file' : 'missing';
+    view = (await app.open(m[1], m[2] ?? null)) ? 'file' : 'missing';
   }
 
   $effect(() => {
-    if (view === 'file' && app.file) document.title = `${app.file.name} — Cashflow`;
+    if (view !== 'file' || !app.file) return;
+    document.title = app.snapshot
+      ? `${app.file.name} · ${app.snapshot.label} — Cashflow`
+      : `${app.file.name} — Cashflow`;
   });
 
   let showInspector = $state(typeof window !== 'undefined' && window.innerWidth >= 1000);
@@ -114,7 +114,8 @@
     const flush = () => app.flush();
     const refresh = () => app.refreshMonths();
     const onStorage = (e: StorageEvent) => {
-      if (isFileKey(e.key)) app.onExternalChange();
+      if (app.file && isSnapshotKey(e.key, app.file.id)) app.refreshSnapshots();
+      else if (isFileKey(e.key)) app.onExternalChange();
     };
     route();
     window.addEventListener('hashchange', route);
@@ -147,7 +148,6 @@
 {:else if view === 'file' && app.file}
   <div class="shell">
     <SheetTabs />
-    <ConflictBanner />
     <Toolbar bind:showInspector />
     <div class="main">
       <Canvas />

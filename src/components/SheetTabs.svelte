@@ -7,7 +7,7 @@
   let inputEl = $state<HTMLInputElement | null>(null);
 
   async function onTab(id: string) {
-    if (app.activeSheetId === id) {
+    if (app.activeSheetId === id && !app.readonly) {
       // A second click on the active tab renames it (works on iPad, unlike double-click).
       renaming = id;
       draft = app.sheet.name;
@@ -27,7 +27,6 @@
   const STATE_LABEL = {
     saved: 'Saved',
     pending: 'Saving…',
-    conflict: 'Not saved',
     error: 'Not saved',
   } as const;
 
@@ -43,8 +42,14 @@
 
 <nav class="tabs">
   <a class="back" href="#/" title="All files">‹ Files</a>
-  <button class="file" onclick={renameFile} title="Rename file">{app.file?.name}</button>
-  <span class="state {app.saveState}">{STATE_LABEL[app.saveState]}</span>
+  {#if app.snapshot}
+    <span class="file">{app.file?.name}</span>
+    <span class="snap">Snapshot: {app.snapshot.label} · read-only</span>
+    <a class="back" href="#/f/{app.file?.id}" target="_blank" rel="noopener">Open live file</a>
+  {:else}
+    <button class="file" onclick={renameFile} title="Rename file">{app.file?.name}</button>
+    <span class="state {app.saveState}">{STATE_LABEL[app.saveState]}</span>
+  {/if}
   <span class="sep"></span>
   {#each app.wb.sheets as s (s.id)}
     <div class="tab" class:active={s.id === app.activeSheetId}>
@@ -61,7 +66,7 @@
       {:else}
         <button class="name" onclick={() => onTab(s.id)} title="Click again to rename">{s.name}</button>
       {/if}
-      {#if s.id === app.activeSheetId && renaming !== s.id}
+      {#if s.id === app.activeSheetId && renaming !== s.id && !app.readonly}
         <button class="mini" onclick={() => app.moveSheet(s.id, -1)} title="Move left">‹</button>
         <button class="mini" onclick={() => app.moveSheet(s.id, 1)} title="Move right">›</button>
         {#if app.wb.sheets.length > 1}
@@ -70,7 +75,9 @@
       {/if}
     </div>
   {/each}
-  <button class="add" onclick={() => app.addSheet()} title="Add sheet">+ Sheet</button>
+  {#if !app.readonly}
+    <button class="add" onclick={() => app.addSheet()} title="Add sheet">+ Sheet</button>
+  {/if}
 </nav>
 
 <style>
@@ -105,7 +112,14 @@
     white-space: nowrap;
     min-width: 56px;
   }
-  .state.conflict,
+  .snap {
+    background: #fff4e5;
+    color: #7a4a00;
+    border-radius: 6px;
+    padding: 3px 8px;
+    white-space: nowrap;
+    font-size: 12px;
+  }
   .state.error {
     color: var(--neg);
   }

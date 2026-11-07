@@ -10,9 +10,17 @@ import {
   type Table,
   type Workbook,
 } from './model';
-import { visibleWindow } from './months';
+import { parseMonth, visibleWindow } from './months';
 import { downloadText } from './download';
-import { fileStore, snapshotFilename, toSnapshot, type FileMeta } from './files';
+import {
+  buildExport,
+  exportFilename,
+  fileStore,
+  type FileDoc,
+  type FileMeta,
+  type SnapshotMeta,
+} from './files';
+import { merge3 } from './merge';
 import {
   bounds,
   cellValue,
@@ -73,13 +81,17 @@ class AppState {
   wb = $state<Workbook>(starterWorkbook());
   /** The open file, or null on the file list. */
   file = $state<FileMeta | null>(null);
-  /** 'conflict': another window saved this file since we loaded it. */
-  saveState = $state<'saved' | 'pending' | 'conflict' | 'error'>('saved');
+  /** Set when this window shows a snapshot: everything is read-only. */
+  snapshot = $state<SnapshotMeta | null>(null);
+  /** Snapshots stored in the open file, newest first. */
+  snapshots = $state<SnapshotMeta[]>([]);
+  saveState = $state<'saved' | 'pending' | 'error'>('saved');
   activeSheetId = $state('');
   selection = $state<Selection | null>(null);
   /** Table shown in the inspector (set by clicking a title or a cell). */
   focusTableId = $state<string | null>(null);
-  editing = $state<{ tableId: string; r: number; c: number } | null>(null);
+  /** Keyed by row id, so edits arriving from another window can't shift it. */
+  editing = $state<{ tableId: string; rowId: string; c: number } | null>(null);
   months = $state(visibleWindow());
   canUndo = $state(false);
   canRedo = $state(false);
@@ -89,8 +101,11 @@ class AppState {
   editorEl: HTMLInputElement | null = null;
   contentEl: HTMLElement | null = null;
 
-  private undoStack: Workbook[] = [];
-  private redoStack: Workbook[] = [];
+  /** Each entry is one change made in this window: content before and after it. */
+  private undoStack: { before: Workbook; after: Workbook | null }[] = [];
+  private redoStack: { before: Workbook; after: Workbook }[] = [];
+  /** The stored version this window last read or wrote: the common base for merges. */
+  private base: Workbook = starterWorkbook();
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
 
   get sheet() {
@@ -108,47 +123,58 @@ class AppState {
 
   /** Recompute the month window (call when the app regains focus; months roll off). */
   refreshMonths() {
+    if (this.readonly) return;
     const w = visibleWindow();
     if (w[0] !== this.months[0] || w.length !== this.months.length) this.months = w;
   }
 
-  // ---------- history & saving ----------
+  get readonly(): boolean {
+    return !!this.snapshot;
+  }
 
-  /** Record the current state so the next change can be undone. */
+  private plain(): Workbook {
+    return $state.snapshot(this.wb) as Workbook;
+  }
+
+  // ---------- history ----------
+
+  /** Record the content before a change. save() fills in the content after it. */
   checkpoint() {
-    this.undoStack.push($state.snapshot(this.wb) as Workbook);
+    if (this.readonly) return;
+    this.undoStack.push({ before: this.plain(), after: null });
     if (this.undoStack.length > MAX_HISTORY) this.undoStack.shift();
     this.redoStack = [];
     this.syncHistoryFlags();
   }
 
   change(fn: () => void) {
+    if (this.readonly) return;
     this.checkpoint();
     fn();
     this.save();
   }
 
+  // Undo and redo reverse or replay only this window's own change, on top of
+  // whatever other windows have changed since.
   undo() {
-    const prev = this.undoStack.pop();
-    if (!prev) return;
-    this.redoStack.push($state.snapshot(this.wb) as Workbook);
-    this.wb = prev;
+    const e = this.undoStack.pop();
+    if (!e || this.readonly) return;
+    const cur = this.plain();
+    const after = e.after ?? cur;
+    this.replace(merge3(after, e.before, cur));
+    this.redoStack.push({ before: e.before, after });
     this.afterRestore();
   }
 
   redo() {
-    const next = this.redoStack.pop();
-    if (!next) return;
-    this.undoStack.push($state.snapshot(this.wb) as Workbook);
-    this.wb = next;
+    const e = this.redoStack.pop();
+    if (!e || this.readonly) return;
+    this.replace(merge3(e.before, e.after, this.plain()));
+    this.undoStack.push(e);
     this.afterRestore();
   }
 
   private afterRestore() {
-    if (!this.wb.sheets.some((s) => s.id === this.activeSheetId)) {
-      this.activeSheetId = this.wb.sheets[0].id;
-    }
-    this.clampSelection();
     this.syncHistoryFlags();
     this.save();
   }
@@ -158,21 +184,62 @@ class AppState {
     this.canRedo = this.redoStack.length > 0;
   }
 
+  /** Swap in new content, keeping the selection on the same rows. */
+  private replace(next: Workbook) {
+    const sel = this.selection;
+    const old = this.table(sel?.tableId);
+    type Ref = { id: string } | { footer: number };
+    const ref = (r: number): Ref =>
+      old && isBodyRow(old, r) ? { id: old.rows[r].id } : { footer: r - (old?.rows.length ?? 0) };
+    const refs = sel
+      ? { anchor: ref(sel.anchor.r), ranges: sel.ranges.map((g) => [ref(g.a.r), ref(g.b.r)]) }
+      : null;
+    this.wb = next;
+    if (!this.wb.sheets.some((x) => x.id === this.activeSheetId)) {
+      this.activeSheetId = this.wb.sheets[0].id;
+    }
+    const t = this.table(sel?.tableId);
+    if (sel && refs && t) {
+      const toRow = (x: Ref, fallback: number) => {
+        if ('footer' in x) return t.rows.length + x.footer;
+        const i = t.rows.findIndex((row) => row.id === x.id);
+        return i >= 0 ? i : fallback;
+      };
+      sel.anchor = { r: toRow(refs.anchor, sel.anchor.r), c: sel.anchor.c };
+      sel.ranges = sel.ranges.map((g, i) => ({
+        a: { r: toRow(refs.ranges[i][0], g.a.r), c: g.a.c },
+        b: { r: toRow(refs.ranges[i][1], g.b.r), c: g.b.c },
+      }));
+    }
+    this.clampSelection();
+  }
+
   // ---------- files ----------
 
-  /** Load a file into the editor. Returns false if it does not exist. */
-  async open(id: string): Promise<boolean> {
-    if (this.file?.id === id) return true;
+  /** Open a file in this window, or one of its snapshots (read-only). */
+  async open(id: string, snapId: string | null = null): Promise<boolean> {
+    if (this.file?.id === id && (this.snapshot?.id ?? null) === snapId) return true;
     await this.close();
-    const doc = await fileStore.load(id);
-    if (!doc) return false;
-    this.load(doc.meta, doc.wb);
+    if (snapId) {
+      const doc = await fileStore.load(id);
+      const snap = await fileStore.loadSnapshot(id, snapId);
+      if (!doc || !snap) return false;
+      this.load(doc.meta, snap.wb, snap.meta);
+    } else {
+      await fileStore.ensureMonthEnd(id);
+      const doc = await fileStore.load(id);
+      if (!doc) return false;
+      this.load(doc.meta, doc.wb, null);
+    }
+    await this.refreshSnapshots();
     return true;
   }
 
-  private load(meta: FileMeta, wb: Workbook) {
+  private load(meta: FileMeta, wb: Workbook, snapshot: SnapshotMeta | null) {
     this.file = meta;
+    this.snapshot = snapshot;
     this.wb = wb;
+    this.base = structuredClone(wb);
     const saved = readStorage(SHEET_KEY + meta.id);
     this.activeSheetId = wb.sheets.some((s) => s.id === saved) ? saved! : wb.sheets[0].id;
     this.undoStack = [];
@@ -182,7 +249,13 @@ class AppState {
     this.focusTableId = null;
     this.editing = null;
     this.saveState = 'saved';
-    this.refreshMonths();
+    if (snapshot) {
+      // Show the months as they were at the snapshot: its month to December of the next year.
+      const { year, month } = parseMonth(snapshot.asOf);
+      this.months = visibleWindow(new Date(year, month - 1, 15));
+    } else {
+      this.months = visibleWindow();
+    }
   }
 
   async close() {
@@ -190,6 +263,8 @@ class AppState {
     this.commitEdit();
     await this.flush();
     this.file = null;
+    this.snapshot = null;
+    this.snapshots = [];
     this.selection = null;
     this.focusTableId = null;
   }
@@ -201,83 +276,123 @@ class AppState {
     this.file.name = n;
   }
 
-  /** Another window changed storage: pick up its version if we have nothing unsaved. */
-  async onExternalChange() {
+  async refreshSnapshots() {
+    this.snapshots = this.file ? await fileStore.listSnapshots(this.file.id) : [];
+  }
+
+  async takeSnapshot(label: string) {
+    const f = this.file;
+    if (!f || this.readonly) return;
+    this.commitEdit();
+    await this.flush();
+    try {
+      const meta = await fileStore.takeSnapshot(f.id, label);
+      await this.refreshSnapshots();
+      this.flashNotice(`Snapshot "${meta.label}" saved.`);
+    } catch {
+      this.flashNotice('Could not save the snapshot: storage is full.');
+    }
+  }
+
+  async deleteSnapshot(snapId: string) {
+    if (!this.file) return;
+    await fileStore.deleteSnapshot(this.file.id, snapId);
+    await this.refreshSnapshots();
+  }
+
+  /** Copy the snapshot shown in this window into a new, editable file. */
+  async snapshotToNewFile(): Promise<string | null> {
+    if (!this.file || !this.snapshot) return null;
+    const meta = await fileStore.create(`${this.file.name} – ${this.snapshot.label}`, this.plain());
+    return meta.id;
+  }
+
+  async downloadFile() {
     const f = this.file;
     if (!f) return;
+    await this.flush();
+    const data = await buildExport(fileStore, f.id);
+    if (data) downloadText(exportFilename(f.name), JSON.stringify(data, null, 2));
+  }
+
+  /** Another window saved: bring its changes in, keeping this window's unsaved edits. */
+  async onExternalChange() {
+    const f = this.file;
+    if (!f || this.readonly) return;
     const doc = await fileStore.load(f.id);
     if (!doc) {
       this.saveState = 'error';
       this.flashNotice('This file was deleted in another window.');
       return;
     }
-    if (doc.meta.rev === f.rev) {
-      f.name = doc.meta.name;
-      return;
-    }
-    if (this.saveState === 'saved') {
-      this.load(doc.meta, doc.wb);
-      this.flashNotice('Updated with changes from another window.');
-    } else {
-      this.saveState = 'conflict';
-    }
+    f.name = doc.meta.name;
+    if (doc.meta.rev !== f.rev) this.absorb(doc);
   }
 
-  /** After a conflict: take the other window's version, or overwrite it with ours. */
-  async resolveConflict(choice: 'theirs' | 'mine') {
-    const f = this.file;
-    if (!f) return;
-    if (choice === 'theirs') {
-      const doc = await fileStore.load(f.id);
-      if (doc) this.load(doc.meta, doc.wb);
-      return;
-    }
-    this.saveState = 'pending';
-    await this.flush(true);
-  }
-
-  downloadSnapshot() {
-    if (!this.file) return;
-    const snap = toSnapshot(this.file.name, $state.snapshot(this.wb) as Workbook);
-    downloadText(snapshotFilename(this.file.name), JSON.stringify(snap, null, 2));
+  private absorb(doc: FileDoc) {
+    const f = this.file!;
+    const merged = this.saveState === 'pending' ? merge3(this.base, this.plain(), doc.wb) : doc.wb;
+    this.replace(merged);
+    this.base = doc.wb;
+    f.rev = doc.meta.rev;
+    f.updatedAt = doc.meta.updatedAt;
+    f.monthEndDone = doc.meta.monthEndDone;
+    // If this window had unsaved edits, they are still pending and the
+    // scheduled save writes the merged result.
   }
 
   private changeSeq = 0;
 
   save() {
-    if (!this.file) return;
+    if (!this.file || this.readonly) return;
+    const top = this.undoStack[this.undoStack.length - 1];
+    if (top && !top.after) top.after = this.plain();
     this.changeSeq++;
-    if (this.saveState !== 'conflict') this.saveState = 'pending';
+    this.saveState = 'pending';
     if (this.saveTimer) clearTimeout(this.saveTimer);
     this.saveTimer = setTimeout(() => this.flush(), 250);
   }
 
   private saving: Promise<void> = Promise.resolve();
 
-  /** Write pending changes now. Saves run one at a time, in order. */
-  flush(force = false): Promise<void> {
+  /** Write pending changes now. Saves run one at a time; a clash with another window merges and retries. */
+  flush(): Promise<void> {
     if (this.saveTimer) clearTimeout(this.saveTimer);
     this.saveTimer = null;
     const f = this.file;
-    if (!f) return this.saving;
+    if (!f || this.readonly) return this.saving;
     writeStorage(SHEET_KEY + f.id, this.activeSheetId);
-    if (this.saveState === 'saved' || (this.saveState === 'conflict' && !force)) return this.saving;
-    const wb = $state.snapshot(this.wb) as Workbook;
-    const seq = this.changeSeq;
+    if (this.saveState !== 'pending') return this.saving;
     const run = async () => {
-      if (this.file?.id !== f.id) return;
-      const res = await fileStore.save(f.id, wb, f.rev, force);
-      if (res.ok) {
-        f.rev = res.meta.rev;
-        f.updatedAt = res.meta.updatedAt;
-        // Still 'pending' if more edits arrived while this save was running.
-        if (this.changeSeq === seq) this.saveState = 'saved';
-      } else if (res.reason === 'conflict') {
-        this.saveState = 'conflict';
-      } else {
-        this.saveState = 'error';
-        this.flashNotice(res.reason === 'missing' ? 'This file no longer exists.' : 'Could not save: storage is full or blocked.');
+      for (let attempt = 0; attempt < 5; attempt++) {
+        if (this.file !== f) return;
+        const seq = this.changeSeq;
+        const wb = this.plain();
+        const monthEndBefore = f.monthEndDone;
+        const res = await fileStore.save(f.id, wb, f.rev);
+        if (res.ok) {
+          f.rev = res.meta.rev;
+          f.updatedAt = res.meta.updatedAt;
+          f.monthEndDone = res.meta.monthEndDone;
+          this.base = wb;
+          // Still 'pending' if more edits arrived while this save was running.
+          if (this.changeSeq === seq) this.saveState = 'saved';
+          if (res.meta.monthEndDone !== monthEndBefore) await this.refreshSnapshots();
+          return;
+        }
+        if (res.reason !== 'conflict') {
+          this.saveState = 'error';
+          this.flashNotice(
+            res.reason === 'missing' ? 'This file no longer exists.' : 'Could not save: storage is full or blocked.',
+          );
+          return;
+        }
+        const doc = await fileStore.load(f.id);
+        if (!doc) return;
+        this.absorb(doc);
       }
+      this.saveState = 'error';
+      this.flashNotice('Could not save: the file keeps changing in another window.');
     };
     this.saving = this.saving.then(run, run);
     return this.saving;
@@ -351,12 +466,13 @@ class AppState {
   /** Live drag: the caller calls checkpoint() once when the drag starts. */
   moveTable(id: string, x: number, y: number) {
     const t = this.table(id);
-    if (!t) return;
+    if (!t || this.readonly) return;
     t.x = snap(x);
     t.y = snap(y);
   }
 
   bringToFront(id: string) {
+    if (this.readonly) return;
     const tables = this.sheet.tables;
     const i = tables.findIndex((t) => t.id === id);
     if (i < 0 || i === tables.length - 1) return;
@@ -480,7 +596,7 @@ class AppState {
   // ---------- editing ----------
 
   isEditable(t: Table, p: Pos): boolean {
-    return isBodyRow(t, p.r);
+    return !this.readonly && isBodyRow(t, p.r);
   }
 
   rawValue(t: Table, p: Pos): string {
@@ -512,7 +628,7 @@ class AppState {
     el.style.height = `${r.height}px`;
     el.style.textAlign = p.c === 0 ? 'left' : 'right';
     el.value = seed ?? this.rawValue(t, p);
-    this.editing = { tableId: t.id, r: p.r, c: p.c };
+    this.editing = { tableId: t.id, rowId: t.rows[p.r].id, c: p.c };
     el.focus();
     const end = el.value.length;
     el.setSelectionRange(end, end);
@@ -523,7 +639,10 @@ class AppState {
     const el = this.editorEl;
     if (!ed || !el) return;
     this.editing = null;
-    if (!this.setCell(ed.tableId, { r: ed.r, c: ed.c }, el.value)) {
+    const r = this.table(ed.tableId)?.rows.findIndex((row) => row.id === ed.rowId) ?? -1;
+    if (r < 0) {
+      this.flashNotice('That row was deleted in another window.');
+    } else if (!this.setCell(ed.tableId, { r, c: ed.c }, el.value)) {
       this.flashNotice(`Not a number: "${el.value}"`);
     }
     el.blur();

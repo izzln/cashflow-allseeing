@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { fileStore, fromSnapshot, importedName, isFileKey, snapshotFilename, toSnapshot, type FileMeta } from '../lib/files';
+  import { buildExport, exportFilename, fileStore, fromExport, importedName, isFileKey, type FileMeta } from '../lib/files';
   import { downloadText } from '../lib/download';
 
   let files = $state<FileMeta[]>([]);
@@ -36,8 +36,8 @@
   }
 
   async function download(f: FileMeta) {
-    const doc = await fileStore.load(f.id);
-    if (doc) downloadText(snapshotFilename(f.name), JSON.stringify(toSnapshot(f.name, doc.wb), null, 2));
+    const data = await buildExport(fileStore, f.id);
+    if (data) downloadText(exportFilename(f.name), JSON.stringify(data, null, 2));
   }
 
   async function remove(f: FileMeta) {
@@ -52,13 +52,13 @@
     input.value = '';
     if (!file) return;
     try {
-      const snap = fromSnapshot(JSON.parse(await file.text()), file.name.replace(/\.json$/i, ''));
-      if (!snap) throw new Error('not a snapshot');
+      const data = fromExport(JSON.parse(await file.text()), file.name.replace(/\.json$/i, ''));
+      if (!data) throw new Error('not a cashflow file');
       const names = (await fileStore.list()).map((f) => f.name);
-      const meta = await fileStore.create(importedName(snap.name, names, snap.exportedAt), snap.wb);
+      const meta = await fileStore.create(importedName(data.name, names, data.exportedAt), data.wb, data.snapshots);
       open(meta.id);
     } catch {
-      alert('That file is not a Cashflow snapshot.');
+      alert('That is not a Cashflow file.');
     }
   }
 
@@ -82,13 +82,13 @@
     <h1>Cashflow</h1>
     <div class="actions">
       <button class="primary" onclick={create}>+ New file</button>
-      <button onclick={() => importEl?.click()}>Open snapshot…</button>
+      <button onclick={() => importEl?.click()}>Import file…</button>
       <input bind:this={importEl} type="file" accept="application/json,.json" hidden onchange={importFile} />
     </div>
   </header>
 
   {#if loaded && files.length === 0}
-    <p class="empty">No files yet. Create one, or open a downloaded snapshot.</p>
+    <p class="empty">No files yet. Create one, or import a downloaded file.</p>
   {/if}
 
   <ul class="list">
@@ -108,9 +108,9 @@
   </ul>
 
   <p class="note">
-    Files are stored in this browser for now, so each device has its own list. Download a snapshot to
-    move a file to another device or keep a copy. Opening a snapshot always creates a new file and
-    never overwrites one.
+    Files are stored in this browser for now, so each device has its own list. Download a file (it
+    includes its snapshots) to move it to another device or keep a copy. Importing always creates a
+    new file and never overwrites one.
   </p>
 </main>
 

@@ -44,17 +44,17 @@
     <h3>Table</h3>
     <label>
       Name
-      {#key t.id}<input value={t.name} onchange={setName} />{/key}
+      {#key t.id}<input value={t.name} onchange={setName} disabled={app.readonly} />{/key}
     </label>
     <label>
       Opening balance
       {#key `${t.id}:${t.openingBalance}`}
-        <input value={formatNumber(t.openingBalance)} onchange={setOpening} inputmode="decimal" />
+        <input value={formatNumber(t.openingBalance)} onchange={setOpening} inputmode="decimal" disabled={app.readonly} />
       {/key}
     </label>
     <label>
       As of the start of
-      <select value={t.openingMonth} onchange={setOpeningMonth}>
+      <select value={t.openingMonth} onchange={setOpeningMonth} disabled={app.readonly}>
         {#each monthOptions as m (m)}<option value={m}>{label(m)}</option>{/each}
       </select>
     </label>
@@ -64,10 +64,12 @@
         balance.
       </p>
     {/if}
+    {#if !app.readonly}
     <div class="row">
       <button onclick={() => app.addRow(t.id)}>+ Row</button>
       <button class="danger" onclick={remove}>Delete table</button>
     </div>
+    {/if}
   {:else}
     <p class="hint">Select a table to edit its name and opening balance.</p>
   {/if}
@@ -80,7 +82,9 @@
     <li>Drag to select; Shift extends; ⌘ adds more cells. Sum and average show bottom right.</li>
     <li>iPad: tap a cell to select, tap again to edit, drag from a selected cell to extend.</li>
     <li>Copy/paste works with Excel and Numbers. Pasting past the last row adds rows.</li>
-    <li>Files are saved in this browser for now. Use Download to keep a snapshot.</li>
+    <li>The same file can be open in several windows; edits in one show up in the others.</li>
+    <li>Snapshots freeze the file (automatically at month-end). Open one next to the live file to compare.</li>
+    <li>Files are saved in this browser for now. Download keeps a copy with all snapshots.</li>
   </ul>
 </aside>
 

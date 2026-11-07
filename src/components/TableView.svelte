@@ -106,7 +106,7 @@
   let moveStart: { x: number; y: number; tx: number; ty: number; checkpointed: boolean } | null = null;
 
   function onTitleDown(e: PointerEvent) {
-    if ((e.target as HTMLElement).closest('button')) return;
+    if ((e.target as HTMLElement).closest('button') || app.readonly) return;
     e.preventDefault();
     app.commitEdit();
     app.focusTableId = table.id;
