@@ -56,9 +56,23 @@ sheets as tabs along the top, several tables per sheet placed on a canvas, month
 - **Sync setting** per file (default every 15 minutes). One window per file runs the timer. It has
   nothing to pull until the Feishu/Huoban connectors exist (phase 4)
 
+**Phase 3 — Cloudflare server (built; see Deploy)**
+- One Cloudflare Worker serves the app and a small API under `/api/*`; files and snapshots live in
+  Cloudflare D1. The app's static files are served without running the Worker
+- Sign-in with a single password (the `EDITOR_PASSWORD` secret). The session is a signed cookie
+  (HttpOnly, Secure, SameSite=Strict, 90 days). 10 wrong passwords from one address lock sign-in
+  for 15 minutes. Changing the password signs every device out
+- The same file list on every device. Windows on one device update each other at once; other
+  devices notice changes within about 15 seconds (or on switching back to the window)
+- Offline or server unreachable: edits stay in the window and save automatically when the
+  connection returns ("Offline · will retry"); the browser warns before closing with unsaved edits.
+  If the session ends, a sign-in box appears and the edits are saved after signing in
+- The month-end snapshot rule runs on the server, using your local month
+- Files made in the browser before the server existed can be uploaded from the file list (with
+  their snapshots); the browser copy is kept
+- Without the server (`npm run dev`), the app keeps files in the browser as before
+
 **Next**
-- Phase 3: Cloudflare backend (Workers + D1), files synced between devices, login for editing;
-  the `FileStore` interface in `src/lib/files.ts` gets a server-backed implementation
 - Phase 4: Feishu and Huoban connectors, pulled into ledgers on the sync timer
 - Last: view-only share links
 
@@ -72,7 +86,28 @@ npm run check    # type check
 npm run build    # production build in dist/
 ```
 
-Stack: Vite + TypeScript + Svelte 5. No UI or spreadsheet libraries.
+```sh
+npm run dev:server   # build, then run the Worker + local D1 at http://localhost:8787
+                     # (password from .dev.vars: EDITOR_PASSWORD=..., SESSION_SECRET=...)
+```
+
+Stack: Vite + TypeScript + Svelte 5, Cloudflare Workers + D1. No UI or spreadsheet libraries.
+
+## Deploy
+
+Live at https://cashflow-allseeing.cashflow-allseeing.workers.dev (D1 database in APAC).
+
+- `npm run deploy` builds the app, bundles it into the Worker (`scripts/embed-assets.mjs`; no
+  separate static-asset upload), applies new `migrations/` to D1 and deploys
+- Secrets (dashboard → Workers & Pages → cashflow-allseeing → Settings → Variables and Secrets, or
+  `wrangler secret put`): `EDITOR_PASSWORD` (your password, 8+ characters; until it is set nobody
+  can sign in) and `SESSION_SECRET` (long random string; already set). Changing either signs all
+  devices out
+- First-time setup for another account: `wrangler d1 create cashflow-allseeing --location apac`,
+  put the `database_id` in `wrangler.jsonc`, then deploy
+
+Limits: a file's content (with all its ledgers) must stay under 1.9 MB, D1's 2 MB value limit;
+that is many years of ledger entries at ~100 a month. Each snapshot is stored separately.
 
 ## Sync design
 
@@ -84,9 +119,8 @@ Stack: Vite + TypeScript + Svelte 5. No UI or spreadsheet libraries.
 - Live sources: in-app ledger tables (always current), Feishu and Huoban (through the Cloudflare
   Worker, phase 3–4). CSV/Excel is a manual re-import: a browser can't re-read a file on disk by itself
 
-## Data storage (until phase 3)
+## Data storage without the server
 
-Files live in the browser's local storage on each device and do not sync between devices yet.
+When the app runs without the Worker, files live in the browser's local storage on each device.
 Safari may clear site data for sites you haven't visited in 7 days unless the app is added to the
-Home Screen, so download your files regularly until phase 3 adds a server copy. Browser storage is
-small (about 5 MB per site in Safari), and each snapshot is a full copy, so this is a stopgap.
+Home Screen, and browser storage is small (about 5 MB per site in Safari).

@@ -1,5 +1,5 @@
 import { normalizeWorkbook, starterWorkbook, uid, type Workbook } from './model';
-import { addMonths, currentMonth, isMonthKey, monthLabel, parseMonth, type MonthKey } from './months';
+import { currentMonth, isMonthKey, monthEndDue, monthName, type MonthKey } from './months';
 
 /** One cash-flow file: a workbook with its own sheets, tables and snapshots. */
 export interface FileMeta {
@@ -12,6 +12,8 @@ export interface FileMeta {
   rev: number;
   /** The last month that already has its month-end snapshot. */
   monthEndDone?: MonthKey;
+  /** Server only: goes up when snapshots are added or removed. */
+  snapRev?: number;
 }
 
 export interface FileDoc {
@@ -37,13 +39,18 @@ export interface SnapshotDoc {
 export type SaveResult =
   | { ok: true; meta: FileMeta }
   | { ok: false; reason: 'conflict'; current: FileMeta }
-  | { ok: false; reason: 'missing' | 'storage' };
+  /** network: offline or server unreachable (retry); signin: the session ended. */
+  | { ok: false; reason: 'missing' | 'storage' | 'network' | 'signin'; message?: string };
+
+/** Something changed outside this window. */
+export type StoreEvent = { kind: 'list' } | { kind: 'file'; id: string } | { kind: 'snapshots'; id: string };
 
 /**
  * Where files live. Today: browser storage. Phase 3 adds a Cloudflare-backed
  * implementation with the same shape (the month-end rule then runs on the server).
  */
 export interface FileStore {
+  readonly kind: 'local' | 'remote';
   list(): Promise<FileMeta[]>;
   load(id: string): Promise<FileDoc | null>;
   create(name: string, wb?: Workbook, snapshots?: SnapshotDoc[]): Promise<FileMeta>;
@@ -59,6 +66,8 @@ export interface FileStore {
   deleteSnapshot(id: string, snapId: string): Promise<void>;
   /** Take the month-end snapshot if a month has ended since the last one. */
   ensureMonthEnd(id: string, now?: Date): Promise<SnapshotMeta | null>;
+  /** Hear about changes made in other windows (and, for the server, other devices). */
+  watch(cb: (e: StoreEvent) => void): () => void;
 }
 
 /** The subset of the Web Storage API we use, so tests can pass a fake. */
@@ -86,9 +95,7 @@ export function isSnapshotKey(key: string | null, fileId: string): boolean {
   return !!key && key.startsWith(`${fileKey(fileId)}.snap`);
 }
 
-export function monthName(k: MonthKey): string {
-  return `${monthLabel(k)} ${parseMonth(k).year}`;
-}
+export { monthName };
 
 function monthOf(ts: number): MonthKey {
   return currentMonth(new Date(ts));
@@ -96,6 +103,8 @@ function monthOf(ts: number): MonthKey {
 
 /** Stable storage keys use the file id; written without awaits so writes finish synchronously. */
 export class LocalFileStore implements FileStore {
+  readonly kind = 'local';
+
   constructor(private kv: KV) {
     this.migrateLegacy();
   }
@@ -258,6 +267,35 @@ export class LocalFileStore implements FileStore {
     return this.monthEndSync(id, now);
   }
 
+  /** Other windows of this browser announce writes through storage events. */
+  watch(cb: (e: StoreEvent) => void) {
+    if (typeof window === 'undefined') return () => {};
+    const on = (e: StorageEvent) => {
+      if (!isFileKey(e.key)) return;
+      cb({ kind: 'list' });
+      if (e.key === INDEX_KEY) {
+        // A save writes the content first and the new rev into the index second; another
+        // window can see the first notice before the second write, so also report every
+        // file whose rev changed in the index.
+        const revs = (v: string | null) => {
+          try {
+            return new Map((JSON.parse(v ?? '[]') as FileMeta[]).map((m) => [m.id, m.rev]));
+          } catch {
+            return new Map<string, number>();
+          }
+        };
+        const before = revs(e.oldValue);
+        for (const [id, rev] of revs(e.newValue)) if (before.get(id) !== rev) cb({ kind: 'file', id });
+        return;
+      }
+      const rest = (e.key ?? '').slice(fileKey('').length);
+      const [id, sub] = rest.split('.');
+      if (id) cb(sub?.startsWith('snap') ? { kind: 'snapshots', id } : { kind: 'file', id });
+    };
+    window.addEventListener('storage', on);
+    return () => window.removeEventListener('storage', on);
+  }
+
   /**
    * The saved content is unchanged since its last save, so if that save was
    * before this month, it is exactly the content at last month's end.
@@ -265,9 +303,8 @@ export class LocalFileStore implements FileStore {
   private monthEndSync(id: string, now = new Date()): SnapshotMeta | null {
     const meta = this.meta(id);
     if (!meta) return null;
-    const lastEnded = addMonths(currentMonth(now), -1);
-    if (monthOf(meta.createdAt) > lastEnded) return null; // no month has ended yet for this file
-    if (meta.monthEndDone && meta.monthEndDone >= lastEnded) return null;
+    const lastEnded = monthEndDue(monthOf(meta.createdAt), meta.monthEndDone, currentMonth(now));
+    if (!lastEnded) return null;
     const wb = this.readWorkbook(fileKey(id));
     if (!wb) return null;
     const snap: SnapshotMeta = {
@@ -388,4 +425,30 @@ function browserKV(): KV {
   }
 }
 
-export const fileStore: FileStore = new LocalFileStore(browserKV());
+/** Files kept in this browser (used when there is no server, and for uploading them to it). */
+export const localFileStore = new LocalFileStore(browserKV());
+
+/** Hands every call to the current store, so the app can switch to the server after startup. */
+class SwitchableStore implements FileStore {
+  constructor(public impl: FileStore) {}
+  get kind() { return this.impl.kind; }
+  list() { return this.impl.list(); }
+  load(id: string) { return this.impl.load(id); }
+  create(name: string, wb?: Workbook, snapshots?: SnapshotDoc[]) { return this.impl.create(name, wb, snapshots); }
+  save(id: string, wb: Workbook, baseRev: number) { return this.impl.save(id, wb, baseRev); }
+  rename(id: string, name: string) { return this.impl.rename(id, name); }
+  duplicate(id: string) { return this.impl.duplicate(id); }
+  remove(id: string) { return this.impl.remove(id); }
+  listSnapshots(id: string) { return this.impl.listSnapshots(id); }
+  loadSnapshot(id: string, snapId: string) { return this.impl.loadSnapshot(id, snapId); }
+  takeSnapshot(id: string, label: string) { return this.impl.takeSnapshot(id, label); }
+  deleteSnapshot(id: string, snapId: string) { return this.impl.deleteSnapshot(id, snapId); }
+  ensureMonthEnd(id: string, now?: Date) { return this.impl.ensureMonthEnd(id, now); }
+  watch(cb: (e: StoreEvent) => void) { return this.impl.watch(cb); }
+}
+
+export const fileStore = new SwitchableStore(localFileStore);
+
+export function useFileStore(store: FileStore) {
+  fileStore.impl = store;
+}

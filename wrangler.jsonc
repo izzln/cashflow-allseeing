@@ -1,0 +1,20 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "cashflow-allseeing",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-10-01",
+  // The built app is bundled into the Worker (scripts/embed-assets.mjs), which serves it and /api.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "cashflow-allseeing",
+      // Created in the APAC region.
+      "database_id": "2b419627-93ee-46af-b60b-93ac34f56d2a",
+      "migrations_dir": "migrations"
+    }
+  ],
+  // Only the main workers.dev address; no per-version preview addresses.
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": { "enabled": true }
+}
