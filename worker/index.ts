@@ -1,5 +1,29 @@
 import { monthEndDue, monthName, isMonthKey } from '../src/lib/months';
 import { checkPassword, clearCookie, isSignedIn, passwordConfigured, sessionCookie, type AuthEnv } from './auth';
+import { STATIC } from './static.generated';
+
+const SECURITY_HEADERS = {
+  'Content-Security-Policy':
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'same-origin',
+};
+
+/** Serve the built app. File names under /assets/ contain a content hash, so they cache forever. */
+function serveStatic(req: Request, pathname: string): Response {
+  const file = STATIC[pathname === '/' ? '/index.html' : pathname];
+  if (!file || (req.method !== 'GET' && req.method !== 'HEAD')) {
+    return new Response('Not found', { status: 404, headers: SECURITY_HEADERS });
+  }
+  const headers: Record<string, string> = {
+    ...SECURITY_HEADERS,
+    'Content-Type': file.type,
+    ETag: file.etag,
+    'Cache-Control': pathname.startsWith('/assets/') ? 'public, max-age=31536000, immutable' : 'no-cache',
+  };
+  if (req.headers.get('If-None-Match') === file.etag) return new Response(null, { status: 304, headers });
+  return new Response(req.method === 'HEAD' ? null : file.body, { headers });
+}
 
 interface Env extends AuthEnv {
   DB: D1Database;
@@ -320,7 +344,7 @@ async function api(req: Request, env: Env, path: string[]): Promise<Response> {
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
-    if (!url.pathname.startsWith('/api/')) return new Response('Not found', { status: 404 });
+    if (!url.pathname.startsWith('/api/')) return serveStatic(req, url.pathname);
     const path = url.pathname.slice(5).split('/').filter(Boolean).map(decodeURIComponent);
     try {
       return await api(req, env, path);

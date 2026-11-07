@@ -7,10 +7,11 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "check": "svelte-check --tsconfig ./tsconfig.json && tsc -p worker/tsconfig.json",
+    "check": "svelte-check --tsconfig ./tsconfig.json && node scripts/embed-assets.mjs --if-missing && tsc -p worker/tsconfig.json",
     "test": "vitest run",
-    "dev:server": "vite build && wrangler d1 migrations apply DB --local && wrangler dev --local",
-    "deploy": "vite build && wrangler d1 migrations apply DB --remote && wrangler deploy"
+    "dev:server": "npm run build:worker && wrangler d1 migrations apply DB --local && wrangler dev --local",
+    "deploy": "npm run build:worker && wrangler d1 migrations apply DB --remote && wrangler deploy",
+    "build:worker": "vite build && node scripts/embed-assets.mjs"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20261023.1",

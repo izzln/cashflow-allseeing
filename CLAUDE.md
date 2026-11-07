@@ -17,7 +17,9 @@ months as columns. Single editor (the owner) on Mac + iPad; others will get view
 - `src/lib/remote.ts` — `RemoteFileStore` (fetch `/api`, BroadcastChannel + 15 s polling for `watch`);
   `src/lib/session.svelte.ts` picks local vs remote at startup (`/api/session`), sign-in, local→server upload
 - `worker/` — Cloudflare Worker: `/api` routes (files, snapshots, month-end, login), `auth.ts` (signed cookie);
-  schema in `migrations/`. The Worker never parses workbook JSON (free-plan CPU limit); it stores it as text
+  schema in `migrations/`. The Worker never parses workbook JSON (free-plan CPU limit); it stores it as text.
+  It also serves the built app, embedded by `scripts/embed-assets.mjs` into `worker/static.generated.ts`
+  (generated, gitignored) with a strict CSP. Deploy: `npm run deploy` (needs CLOUDFLARE_API_TOKEN)
 - `src/lib/files.ts` — files: `FileStore` interface (async; phase 3 adds a Cloudflare version),
   `LocalFileStore` over localStorage, per-file `rev`, in-file snapshots (manual + month-end), export format
 - `src/lib/merge.ts` — 3-way JSON merge (objects by key, id'd arrays by id); used for multi-window edits and undo

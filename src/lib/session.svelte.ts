@@ -21,7 +21,7 @@ class Session {
       if (!data?.server) throw new Error('no server');
       this.configured = !!data.configured;
       this.signedIn = !!data.signedIn;
-      useFileStore(new RemoteFileStore('/api', () => (this.signedIn = false)));
+      useFileStore(new RemoteFileStore('/api', () => (this.signedIn = false), () => this.signedIn));
       this.mode = 'remote';
     } catch {
       this.mode = 'local';

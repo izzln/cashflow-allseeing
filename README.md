@@ -95,11 +95,16 @@ Stack: Vite + TypeScript + Svelte 5, Cloudflare Workers + D1. No UI or spreadshe
 
 ## Deploy
 
-1. `wrangler d1 create cashflow-allseeing` and put the returned `database_id` in `wrangler.jsonc`
-2. `npm run deploy` (builds, applies `migrations/` to D1, deploys the Worker)
-3. Set secrets (dashboard → Workers → cashflow-allseeing → Settings → Variables and Secrets, or
-   `wrangler secret put`): `EDITOR_PASSWORD` (your password, 8+ characters) and `SESSION_SECRET`
-   (a long random string)
+Live at https://cashflow-allseeing.cashflow-allseeing.workers.dev (D1 database in APAC).
+
+- `npm run deploy` builds the app, bundles it into the Worker (`scripts/embed-assets.mjs`; no
+  separate static-asset upload), applies new `migrations/` to D1 and deploys
+- Secrets (dashboard → Workers & Pages → cashflow-allseeing → Settings → Variables and Secrets, or
+  `wrangler secret put`): `EDITOR_PASSWORD` (your password, 8+ characters; until it is set nobody
+  can sign in) and `SESSION_SECRET` (long random string; already set). Changing either signs all
+  devices out
+- First-time setup for another account: `wrangler d1 create cashflow-allseeing --location apac`,
+  put the `database_id` in `wrangler.jsonc`, then deploy
 
 Limits: a file's content (with all its ledgers) must stay under 1.9 MB, D1's 2 MB value limit;
 that is many years of ledger entries at ~100 a month. Each snapshot is stored separately.

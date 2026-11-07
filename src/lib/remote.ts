@@ -28,6 +28,8 @@ export class RemoteFileStore implements FileStore {
   constructor(
     private base = '/api',
     private onSignedOut: () => void = () => {},
+    /** Polling waits until this is true, so a signed-out page doesn't keep asking. */
+    private signedIn: () => boolean = () => true,
   ) {}
 
   private async req(method: string, path: string, body?: unknown): Promise<Reply> {
@@ -177,7 +179,7 @@ export class RemoteFileStore implements FileStore {
     let stopped = false;
     let first = true;
     const poll = async () => {
-      if (stopped || (typeof document !== 'undefined' && document.visibilityState !== 'visible')) return;
+      if (stopped || !this.signedIn() || (typeof document !== 'undefined' && document.visibilityState !== 'visible')) return;
       let list: FileMeta[];
       try {
         list = await this.list();
