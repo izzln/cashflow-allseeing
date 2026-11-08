@@ -3,6 +3,7 @@
   import { commands, isEnabled, labelOf, run, shortcutText } from '../lib/commands';
   import { STYLES } from '../lib/styles';
   import Icon, { type IconName } from './Icon.svelte';
+  import { fadeOut } from '../lib/motion';
 
   /**
    * The toolbar sits at the right of the top row. As the window narrows it first drops
@@ -39,7 +40,7 @@
   /** First to move into the overflow menu when space runs out. */
   const OVERFLOW_ORDER = ['deleteCol', 'colAfter', 'colBefore', 'deleteRow', 'rowBelow', 'rowAbove', 'fill', 'color', 'zoom', 'table', 'cashflow'];
   const SEP = 9; // group divider incl. margins
-  const MORE = 44; // the » button
+  const MORE = 36; // the » button (touch-target)
 
   const items = $derived(ITEMS.filter((it) => !app.readonly || it.view));
 
@@ -53,7 +54,7 @@
     let groups = 0;
     let last = '';
     for (const it of list) {
-      sum += w[it.key] ?? 44;
+      sum += w[it.key] ?? 36;
       if (it.group !== last) groups++;
       last = it.group;
     }
@@ -103,6 +104,18 @@
   function closeAll() {
     colorOpen = zoomOpen = moreOpen = moreColors = false;
   }
+
+  // Esc closes an open popover first (Stories: Esc closes menu → popover → selection → focus).
+  $effect(() => {
+    if (!(colorOpen || zoomOpen || moreOpen)) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || app.menu) return;
+      e.stopPropagation();
+      closeAll();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  });
 </script>
 
 {#snippet formatBody()}
@@ -128,14 +141,14 @@
 {#snippet tool(it: Item, labels: boolean, measuring = false)}
   {#if it.kind === 'zoom'}
     <div class="zoom" class:pop-wrap={!measuring}>
-      <button class="tool small" tabindex={measuring ? -1 : 0} onclick={() => run('view.zoomOut')} disabled={!isEnabled(commands['view.zoomOut'])}
+      <button class="tool small" onclick={() => run('view.zoomOut')} disabled={!isEnabled(commands['view.zoomOut'])}
         title={`Zoom Out (${shortcutText(commands['view.zoomOut'].keys)})`} aria-label="Zoom out"><Icon name="zoomOut" /></button>
-      <button class="pct" tabindex={measuring ? -1 : 0} onclick={() => { const o = !zoomOpen; closeAll(); zoomOpen = o; }} disabled={!!app.maximizedId}
+      <button class="pct" onclick={() => { const o = !zoomOpen; closeAll(); zoomOpen = o; }} disabled={!!app.maximizedId}
         aria-haspopup="menu" aria-expanded={zoomOpen} title="Zoom">{pct}</button>
-      <button class="tool small" tabindex={measuring ? -1 : 0} onclick={() => run('view.zoomIn')} disabled={!isEnabled(commands['view.zoomIn'])}
+      <button class="tool small" onclick={() => run('view.zoomIn')} disabled={!isEnabled(commands['view.zoomIn'])}
         title={`Zoom In (${shortcutText(commands['view.zoomIn'].keys)})`} aria-label="Zoom in"><Icon name="zoomIn" /></button>
       {#if zoomOpen && !measuring}
-        <div class="pop zooms" role="menu">
+        <div class="pop zooms anim-pop sheet-compact" role="menu" out:fadeOut>
           {#each ZOOM_STEPS as z (z)}
             <button role="menuitem" class:on={Math.abs(app.zoom - z) < 0.001} onclick={() => { app.setZoom(z); closeAll(); }}>{Math.round(z * 100)}%</button>
           {/each}
@@ -144,18 +157,18 @@
     </div>
   {:else if it.kind === 'color'}
     <div class:pop-wrap={!measuring}>
-      <button class="tool" tabindex={measuring ? -1 : 0} disabled={!on(it)} aria-haspopup="true" aria-expanded={colorOpen}
+      <button class="tool" disabled={!on(it)} aria-haspopup="true" aria-expanded={colorOpen}
         onclick={() => { const o = !colorOpen; closeAll(); colorOpen = o; }} title={tip(it)}>
         <Icon name="color" />{#if labels}<span class="lbl">{it.label}</span>{/if}
       </button>
       {#if colorOpen && !measuring}
-        <div class="pop format" role="dialog" aria-label="Cell format">
+        <div class="pop format anim-pop sheet-compact" role="dialog" aria-label="Cell format" out:fadeOut>
           {@render formatBody()}
         </div>
       {/if}
     </div>
   {:else}
-    <button class="tool" tabindex={measuring ? -1 : 0} class:active={it.key === 'inspector' && app.showInspector}
+    <button class="tool" class:active={it.key === 'inspector' && app.showInspector}
       aria-pressed={it.key === 'inspector' ? app.showInspector : undefined}
       onclick={() => it.cmd && run(it.cmd)} disabled={!on(it)} title={tip(it)}>
       <Icon name={iconOf(it)} />{#if labels}<span class="lbl">{labelFor(it)}</span>{/if}
@@ -175,7 +188,7 @@
         <button class="tool" onclick={() => { const o = !moreOpen; closeAll(); moreOpen = o; }} aria-haspopup="menu" aria-expanded={moreOpen}
           title="More tools" aria-label="More tools"><Icon name="more" /></button>
         {#if moreOpen}
-          <div class="pop more right" role="menu" aria-label="More tools">
+          <div class="pop more right anim-pop sheet-compact" role="menu" aria-label="More tools" out:fadeOut>
             {#each layout.hidden as h (h.key)}
               {#if h.kind === 'zoom'}
                 <div class="zoomrow">
@@ -251,8 +264,8 @@
     background: transparent;
     border-radius: var(--radius-7);
     padding: 3px 6px;
-    min-width: 44px;
-    min-height: 44px;
+    min-width: var(--touch-target);
+    min-height: var(--touch-target);
     color: var(--text);
     flex-shrink: 0;
   }
@@ -265,7 +278,7 @@
     color: var(--accent);
   }
   .tool.small {
-    min-width: 36px;
+    min-width: var(--touch-target);
   }
   .lbl {
     font-size: 10px;
@@ -375,7 +388,7 @@
     gap: 8px;
     border: none;
     background: none;
-    min-height: 34px;
+    min-height: var(--row-h);
     text-align: left;
     padding: 0 10px;
     width: 100%;
@@ -384,11 +397,13 @@
   @media (pointer: coarse) {
     .zooms button,
     .more > button {
-      min-height: 44px;
+      min-height: var(--touch-target);
     }
   }
   .zooms button:hover,
-  .more > button:hover:not(:disabled) {
+  .zooms button:active,
+  .more > button:hover:not(:disabled),
+  .more > button:active:not(:disabled) {
     background: var(--accent);
     color: var(--on-accent);
   }
@@ -396,7 +411,7 @@
     font-weight: 700;
   }
   .more {
-    width: 260px;
+    width: var(--overflow-w);
     padding: 6px;
   }
   .keys {
@@ -411,8 +426,8 @@
     padding: 4px 6px;
   }
   .zoomrow button {
-    min-width: 44px;
-    min-height: 40px;
+    min-width: var(--touch-target);
+    min-height: var(--touch-target);
   }
   .zoomrow span {
     min-width: 48px;

@@ -61,7 +61,8 @@
   ];
 </script>
 
-<aside class="inspector">
+<!-- Docked when wide; an overlay from the trailing edge when regular; a bottom sheet when compact. -->
+<aside class="inspector" class:overlay={app.sizeClass === 'regular'} class:sheet={app.sizeClass === 'compact'}>
   {#if !t}
     <h3>File</h3>
     <label>
@@ -216,7 +217,7 @@
     <li>Outflows are negative numbers. Net cash flow = sum of rows; Balance carries forward.</li>
     <li>Type or press Enter to edit. Tab / Enter move on. Delete clears.</li>
     <li>Drag to select; Shift extends; ⌘ adds more cells. Sum and average show bottom right.</li>
-    <li>iPad: tap a cell to select, tap again to edit, drag from a selected cell to extend.</li>
+    <li>iPad: tap a cell to select, tap it again for the edit menu, double-tap to edit, drag from a selected cell to extend.</li>
     <li>Copy/paste works with Excel and Numbers. Pasting past the last row adds rows.</li>
     <li>The same file can be open in several windows; edits in one show up in the others.</li>
     <li>Snapshots freeze the file (automatically at month-end). Open one next to the live file to compare.</li>
@@ -240,12 +241,54 @@
 
 <style>
   .inspector {
-    width: 290px;
+    width: var(--inspector-w);
     flex-shrink: 0;
     overflow-y: auto;
     background: var(--panel);
     border-left: 1px solid var(--line);
     padding: 12px 14px 80px;
+    padding-right: max(14px, env(safe-area-inset-right));
+  }
+  .inspector.overlay {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    max-width: 100%;
+    /* Above content and the status bubble, below the top bar and its popovers. */
+    z-index: calc(var(--z-topbar) - 200);
+    box-shadow: var(--shadow-menu);
+    padding-bottom: calc(24px + env(safe-area-inset-bottom));
+    animation: cf-slide-in-end var(--motion-panel) var(--ease-enter);
+  }
+  .inspector.sheet {
+    position: fixed;
+    left: 8px;
+    right: 8px;
+    bottom: calc(8px + env(safe-area-inset-bottom) + var(--kb-inset));
+    width: auto;
+    max-height: 60vh;
+    max-height: 60dvh;
+    /* Above content and the status bubble, below the top bar and its popovers. */
+    z-index: calc(var(--z-topbar) - 200);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-12);
+    box-shadow: var(--shadow-menu);
+    padding-bottom: 24px;
+    animation: cf-slide-up var(--motion-panel) var(--ease-enter);
+  }
+  /* Very short screens: the sheet takes the full height. */
+  @media (max-height: 499px) {
+    .inspector.sheet {
+      top: calc(8px + env(safe-area-inset-top));
+      max-height: none;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .inspector.overlay,
+    .inspector.sheet {
+      animation-name: cf-fade-in;
+    }
   }
   h3 {
     font-size: 12px;

@@ -3,6 +3,7 @@
   import { app } from '../lib/store.svelte';
   import { commands, shortcutText } from '../lib/commands';
   import Icon from './Icon.svelte';
+  import { fadeOut } from '../lib/motion';
 
   /**
    * The file name with its save status. Clicking or tapping it opens the File menu:
@@ -24,6 +25,8 @@
     signin: 'Sign in to save',
     error: 'Not saved',
   } as const;
+  /** Compact width: the status shortens (Stories: chrome gives way first). */
+  const SHORT_LABEL = { saved: 'Saved', pending: 'Saving…', offline: 'Offline', signin: 'Sign in', error: 'Not saved' } as const;
 
   // Commands elsewhere ask the menu to open in rename or take-snapshot mode.
   $effect(() => {
@@ -33,9 +36,6 @@
     open = true;
     void (req === 'rename' ? startRename() : startSnapshot());
   });
-
-  /** Snapshot deletes can't be undone, so they ask first — in place, not in a browser dialog. */
-  let confirmDelete = $state<string | null>(null);
 
   async function startRename() {
     if (app.readonly) return;
@@ -71,7 +71,6 @@
     open = false;
     renaming = false;
     taking = false;
-    confirmDelete = null;
   }
 
   async function toNewFile() {
@@ -91,13 +90,13 @@
   {#if app.snapshot}
     <span class="snap">Snapshot: {app.snapshot.label} · read-only</span>
   {:else}
-    <span class="state {app.saveState}">{STATE_LABEL[app.saveState]}</span>
+    <span class="state {app.saveState}" title={STATE_LABEL[app.saveState]}>{(app.sizeClass === 'compact' ? SHORT_LABEL : STATE_LABEL)[app.saveState]}</span>
   {/if}
 
   {#if open}
     <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
     <div class="backdrop" onclick={close}></div>
-    <div class="menu" role="menu" tabindex="-1" onkeydown={(e) => e.key === 'Escape' && close()}>
+    <div class="menu anim-pop from-left sheet-compact" role="menu" tabindex="-1" onkeydown={(e) => e.key === 'Escape' && close()} out:fadeOut>
       {#if renaming}
         <div class="field">
           <input bind:this={nameEl} bind:value={name} aria-label="File name"
@@ -142,6 +141,13 @@
         {/if}
       {/if}
       <ul class="snaps">
+        {#if app.pendingSnapDelete}
+          <!-- Undo where the snapshot was; the status bubble also offers it once the menu is closed. -->
+          <li class="deleted">
+            <span>Deleted “{app.pendingSnapDelete.label}”.</span>
+            <button class="undo" onclick={() => app.undoSnapshotDelete()}>Undo</button>
+          </li>
+        {/if}
         {#each app.snapshots as s (s.id)}
           <li class:current={app.snapshot?.id === s.id}>
             <a href="#/f/{app.file?.id}/s/{s.id}" target="_blank" rel="noopener" title="Open beside the live file" onclick={close}>
@@ -149,17 +155,11 @@
               <span class="meta">{s.kind === 'month-end' ? 'Month-end' : 'Manual'} · {fmt.format(s.takenAt)}</span>
             </a>
             {#if !app.readonly}
+              <!-- Undoable: the status bubble offers Undo (Stories: prefer undo over confirming). -->
               <button class="x" aria-label={`Delete snapshot ${s.label}`} title="Delete snapshot"
-                onclick={() => (confirmDelete = confirmDelete === s.id ? null : s.id)}>×</button>
+                onclick={() => app.deleteSnapshot(s.id)}>×</button>
             {/if}
           </li>
-          {#if confirmDelete === s.id}
-            <li class="confirm">
-              <span>Delete “{s.label}”? This can’t be undone.</span>
-              <button onclick={() => (confirmDelete = null)}>Cancel</button>
-              <button class="danger-fill" onclick={() => { app.deleteSnapshot(s.id); confirmDelete = null; }}>Delete</button>
-            </li>
-          {/if}
         {:else}
           <li class="hint">None yet. One is taken automatically at each month-end.</li>
         {/each}
@@ -229,7 +229,7 @@
     position: fixed;
     z-index: var(--z-topbar);
     margin-top: 40px;
-    width: min(340px, calc(100vw - 16px));
+    width: min(var(--popover-w), calc(100vw - 16px));
     max-height: 75vh;
     overflow-y: auto;
     background: var(--menu-bg);
@@ -258,10 +258,12 @@
     .menu > button,
     .menu .item,
     .snaps a {
-      min-height: 44px;
+      min-height: var(--touch-target);
     }
   }
   .menu > button:hover,
+  .menu > button:active,
+  .menu .item:active,
   .menu .item:hover {
     background: var(--accent);
     color: var(--on-accent);
@@ -310,6 +312,18 @@
     align-items: center;
     gap: 4px;
   }
+  .snaps li.deleted {
+    justify-content: space-between;
+    padding: 2px 8px;
+    color: var(--muted);
+  }
+  .undo {
+    border: none;
+    background: none;
+    color: var(--accent);
+    font-weight: 600;
+    min-height: var(--touch-target);
+  }
   .snaps li.current {
     background: var(--accent-soft);
     border-radius: var(--radius-6);
@@ -341,24 +355,9 @@
     padding: 4px 8px;
   }
   .x {
-    min-width: 36px;
-    min-height: 36px;
+    min-width: var(--touch-target);
+    min-height: var(--touch-target);
     padding: 0;
     color: var(--neg);
-  }
-  .snaps li.confirm {
-    flex-wrap: wrap;
-    gap: 6px;
-    padding: 6px 8px;
-    background: var(--head);
-    border-radius: var(--radius-6);
-  }
-  .confirm span {
-    flex: 1 1 100%;
-  }
-  .danger-fill {
-    background: var(--neg);
-    border-color: var(--neg);
-    color: var(--on-accent);
   }
 </style>

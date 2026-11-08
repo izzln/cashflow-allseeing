@@ -4,6 +4,7 @@
   import { buildExport, exportFilename, fileStore, fromExport, importedName, localFileStore, type FileMeta } from '../lib/files';
   import { downloadText } from '../lib/download';
   import { session } from '../lib/session.svelte';
+  import StatusBar from './StatusBar.svelte';
 
   let files = $state<FileMeta[]>([]);
   let loaded = $state(false);
@@ -95,8 +96,12 @@
     if (save && f && draft.trim() && draft.trim() !== f.name) await attempt(() => fileStore.rename(f.id, draft.trim()));
   }
 
-  // Deleting a file can't be undone, so the row asks first (in place, not a browser dialog).
-  let confirmId = $state<string | null>(null);
+  /**
+   * Delete is undoable (Stories: List): the file leaves the list at once and is removed for good
+   * when the Undo notice expires, or when this page closes.
+   */
+  let pendingDelete = $state<{ f: FileMeta; timer: ReturnType<typeof setTimeout> } | null>(null);
+  const shown = $derived(files.filter((f) => f.id !== pendingDelete?.f.id));
 
   async function duplicate(f: FileMeta) {
     await attempt(() => fileStore.duplicate(f.id));
@@ -110,8 +115,25 @@
   }
 
   async function remove(f: FileMeta) {
-    confirmId = null;
-    await attempt(() => fileStore.remove(f.id));
+    await commitDelete();
+    const timer = setTimeout(() => void commitDelete(), 6000);
+    pendingDelete = { f, timer };
+    app.flashNotice(`Deleted “${f.name}”.`, 'info', {
+      label: 'Undo',
+      run: () => {
+        if (pendingDelete?.f.id !== f.id) return;
+        clearTimeout(timer);
+        pendingDelete = null;
+      },
+    });
+  }
+
+  async function commitDelete() {
+    const p = pendingDelete;
+    if (!p) return;
+    clearTimeout(p.timer);
+    pendingDelete = null;
+    await attempt(() => fileStore.remove(p.f.id));
   }
 
   async function importFile(e: Event) {
@@ -138,7 +160,13 @@
       if (e.kind === 'list' || e.kind === 'file') refresh();
     });
     document.title = 'Cashflow — Files';
-    return unwatch;
+    const onHide = () => void commitDelete();
+    window.addEventListener('pagehide', onHide);
+    return () => {
+      unwatch();
+      window.removeEventListener('pagehide', onHide);
+      void commitDelete();
+    };
   });
 </script>
 
@@ -167,12 +195,12 @@
   {#if error}<p class="error">{error} <button onclick={refresh}>Try again</button></p>{/if}
   {#if problem}<p class="error" role="alert">{problem} <button onclick={() => (problem = '')}>OK</button></p>{/if}
 
-  {#if loaded && !error && files.length === 0}
+  {#if loaded && !error && shown.length === 0}
     <p class="empty">No files yet. Create one, or import a downloaded file.</p>
   {/if}
 
   <ul class="list">
-    {#each files as f (f.id)}
+    {#each shown as f (f.id)}
       <li>
         {#if renamingId === f.id}
           <input class="rename" bind:this={renameEl} bind:value={draft} aria-label="File name"
@@ -191,15 +219,8 @@
           <button onclick={() => startRename(f)}>Rename…</button>
           <button onclick={() => duplicate(f)}>Duplicate</button>
           <button onclick={() => download(f)}>Download</button>
-          <button class="danger" onclick={() => (confirmId = confirmId === f.id ? null : f.id)}>Delete…</button>
+          <button class="danger" onclick={() => remove(f)}>Delete</button>
         </span>
-        {#if confirmId === f.id}
-          <div class="confirm" role="alertdialog" aria-label="Delete file">
-            <span>Delete “{f.name}”? This can’t be undone. Download a copy first if you may need it.</span>
-            <button onclick={() => (confirmId = null)}>Cancel</button>
-            <button class="danger-fill" onclick={() => remove(f)}>Delete</button>
-          </div>
-        {/if}
       </li>
     {/each}
   </ul>
@@ -216,12 +237,13 @@
     {/if}
   </p>
 </main>
+<StatusBar />
 
 <style>
   .home {
     height: 100%;
     overflow-y: auto;
-    max-width: 920px;
+    max-width: var(--page-w);
     margin: 0 auto;
     padding: calc(24px + env(safe-area-inset-top)) 16px 40px;
   }
@@ -320,24 +342,6 @@
     border: 1px solid var(--accent);
     border-radius: var(--radius-6);
     padding: 4px 8px;
-  }
-  .confirm {
-    flex: 1 1 100%;
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px;
-    background: var(--head);
-    border-radius: var(--radius-8);
-    padding: 8px 10px;
-  }
-  .confirm span {
-    flex: 1 1 260px;
-  }
-  .danger-fill {
-    background: var(--neg);
-    border-color: var(--neg);
-    color: var(--on-accent);
   }
   .empty,
   .note {

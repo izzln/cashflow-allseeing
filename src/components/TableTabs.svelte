@@ -11,8 +11,13 @@
    *
    * They are drawn on an unscaled layer above the zoomed canvas, in screen pixels:
    * they follow the table at any zoom but keep a full-size, tappable thickness.
+   *
+   * `pinned` (Fill Window): the tabs sit in a fixed gutter left of and above the
+   * scrolling body, follow its scroll, and hide under the pinned headers. Drags only
+   * reorder there (there is no canvas to drop onto); near an edge the body scrolls.
    */
-  let { table, layer }: { table: Table; layer: HTMLElement } = $props();
+  let { table, layer, pinned = false, scroller = null }: { table: Table; layer: HTMLElement; pinned?: boolean; scroller?: HTMLElement | null } =
+    $props();
 
   let rows = $state<{ i: number; top: number; height: number }[]>([]);
   let cols = $state<{ i: number; left: number; width: number }[]>([]);
@@ -37,6 +42,20 @@
     box = { left: tbl.left - f.left, top: tbl.top - f.top, width: tbl.width, height: tbl.height };
     frameTop = outer.top - f.top;
     frameLeft = outer.left - f.left;
+    if (pinned && scroller) {
+      // Visible part of the body, minus the pinned header rows and header column.
+      const b = scroller.getBoundingClientRect();
+      const heads = [...frame.querySelectorAll<HTMLElement>('thead th')].map((th) => th.getBoundingClientRect().bottom);
+      const first = frame.querySelector<HTMLElement>('tbody td[data-c="0"], tfoot td[data-c="0"]')?.getBoundingClientRect();
+      clip = {
+        top: Math.max(b.top, ...heads) - f.top,
+        bottom: b.top + scroller.clientHeight - f.top,
+        left: b.left - f.left,
+        right: b.left + scroller.clientWidth - f.left,
+        afterFirst: Math.max(b.left, first?.right ?? b.left) - f.left,
+      };
+      bodyTop = b.top - f.top;
+    }
     rows = [...frame.querySelectorAll<HTMLElement>('tbody td[data-c="0"]')].map((td) => {
       const r = td.getBoundingClientRect();
       return { i: Number(td.dataset.r), top: r.top - f.top, height: r.height };
@@ -49,11 +68,57 @@
   }
   let frameTop = $state(0);
   let frameLeft = $state(0);
+  let bodyTop = $state(0);
+  let clip = $state({ top: 0, bottom: 0, left: 0, right: 0, afterFirst: 0 });
+
+  /** The visible span of a tab once clipped to the body (pinned mode); null when hidden. */
+  function span(start: number, size: number, lo: number, hi: number): { start: number; size: number } | null {
+    const a = Math.max(start, lo);
+    const b = Math.min(start + size, hi);
+    return b - a < 6 ? null : { start: a, size: b - a };
+  }
+  const rowTabs = $derived(
+    rows
+      .filter((r) => r.i < bodyCount)
+      .map((r) => {
+        const v = pinned ? span(r.top, r.height, clip.top, clip.bottom) : { start: r.top, size: r.height };
+        return v && { i: r.i, top: v.start, height: v.size };
+      })
+      .filter((r) => !!r),
+  );
+  const colTabs = $derived(
+    cols
+      .map((c) => {
+        const v = pinned ? span(c.left, c.width, c.i === 0 ? clip.left : clip.afterFirst, clip.right) : { start: c.left, size: c.width };
+        return v && { i: c.i, left: v.start, width: v.size };
+      })
+      .filter((c) => !!c),
+  );
+
+  // Pinned: follow the body's scroll and size.
+  $effect(() => {
+    if (!pinned || !scroller) return;
+    let raf = 0;
+    const again = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => void measure());
+    };
+    const ro = new ResizeObserver(again);
+    ro.observe(scroller);
+    scroller.addEventListener('scroll', again, { passive: true });
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+      scroller.removeEventListener('scroll', again);
+    };
+  });
 
   $effect(() => {
     app.version;
     app.months;
     app.zoom;
+    app.fillWidth;
+    app.layoutTick;
     bodyCount;
     table.x;
     table.y;
@@ -106,6 +171,8 @@
     to: number;
     marker: number;
     pointer: string;
+    /** Touch: the line was already selected (and its menu shut): this tap shows the edit menu. */
+    showMenu: boolean;
   } | null>(null);
 
   /** Right-click on a tab: select that row/column (unless already selected) and show its menu. */
@@ -122,21 +189,23 @@
     e.preventDefault();
     e.stopPropagation();
     app.commitEdit();
+    const showMenu = wholeLines(axis).includes(i) && !e.shiftKey && app.menuClosedAt !== e.timeStamp;
     app.menu = null;
     let lines = wholeLines(axis);
     if (!lines.includes(i) || e.shiftKey) {
       app.selectLines(table.id, axis, i, i, e.shiftKey);
       lines = wholeLines(axis);
     }
-    const draggable = !app.readonly && (axis === 'row' ? lines.every((r) => r < bodyCount) : canDragCols);
-    if (!draggable) return;
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    drag = { axis, lines, x: e.clientX, y: e.clientY, moved: false, outside: false, to: -1, marker: -1, pointer: e.pointerType };
+    const draggable = !app.readonly && (axis === 'row' ? lines.every((r) => r < bodyCount) : canDragCols);
+    // A line that can't move still takes the press, so a second tap shows its menu.
+    drag = { axis, lines: draggable ? lines : [], x: e.clientX, y: e.clientY, moved: false, outside: false, to: -1, marker: -1, pointer: e.pointerType, showMenu };
   }
 
   function move(e: PointerEvent) {
     const frame = frameEl();
     if (!drag || !frame) return;
+    if (!drag.lines.length) return;
     if (!drag.moved && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 5) return;
     drag.moved = true;
     drag.x = e.clientX;
@@ -146,17 +215,28 @@
     if (!t) return;
     const margin = 28;
     drag.outside =
-      e.clientX < t.left - margin - 24 || e.clientX > t.right + margin || e.clientY < t.top - margin - 32 || e.clientY > t.bottom + margin;
+      !pinned &&
+      (e.clientX < t.left - margin - 24 || e.clientX > t.right + margin || e.clientY < t.top - margin - 32 || e.clientY > t.bottom + margin);
     if (drag.outside) return;
+    if (pinned) autoScroll(e.clientX - f.left, e.clientY - f.top);
+    place(e.clientX - f.left, e.clientY - f.top);
+  }
+
+  /** Where a drag at (x, y) (layer pixels) would drop, and the marker for it. */
+  function place(x: number, y: number) {
+    if (!drag) return;
+    if (pinned) {
+      // Only what is visible can be a drop target.
+      x = Math.min(Math.max(x, clip.left), clip.right);
+      y = Math.min(Math.max(y, clip.top), clip.bottom);
+    }
     if (drag.axis === 'row') {
       const body = rows.filter((r) => r.i < bodyCount);
-      const y = e.clientY - f.top;
       let to = body.length;
       for (const r of body) if (y < r.top + r.height / 2) { to = r.i; break; }
       drag.to = to;
       drag.marker = to < body.length ? body[to].top : (body.at(-1)?.top ?? 0) + (body.at(-1)?.height ?? 0);
     } else {
-      const x = e.clientX - f.left;
       let to = cols.length;
       for (const c of cols) if (x < c.left + c.width / 2) { to = c.i; break; }
       drag.to = to;
@@ -164,12 +244,32 @@
     }
   }
 
+  // Pinned: holding a drag near the body's edge scrolls it.
+  let scrollTimer = 0;
+  function autoScroll(x: number, y: number) {
+    cancelAnimationFrame(scrollTimer);
+    if (!drag || !scroller) return;
+    const edge = 28;
+    const dy = drag.axis === 'row' ? (y < clip.top + edge ? -1 : y > clip.bottom - edge ? 1 : 0) : 0;
+    const dx = drag.axis === 'col' ? (x < clip.afterFirst + edge ? -1 : x > clip.right - edge ? 1 : 0) : 0;
+    if (!dx && !dy) return;
+    const step = () => {
+      if (!drag || !scroller) return;
+      scroller.scrollBy(dx * 14, dy * 14);
+      void measure().then(() => place(x, y));
+      scrollTimer = requestAnimationFrame(step);
+    };
+    scrollTimer = requestAnimationFrame(step);
+  }
+
   function up(e: PointerEvent) {
+    cancelAnimationFrame(scrollTimer);
     const d = drag;
     drag = null;
     if (!d) return;
     if (!d.moved) {
-      if (d.pointer === 'touch') {
+      // Touch, as in Numbers: the first tap selects the line; a tap on the selected line shows its menu.
+      if (d.pointer === 'touch' && d.showMenu) {
         const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
         app.menu = { kind: 'edit', target: d.axis === 'row' ? 'rows' : 'columns', tableId: table.id, x: r.left + r.width / 2, y: r.top };
       }
@@ -188,6 +288,11 @@
     }
   }
 
+  function cancel() {
+    cancelAnimationFrame(scrollTimer);
+    drag = null;
+  }
+
   const label = (i: number) => String(i + 1);
   const colLabel = (i: number) => {
     let n = i + 1;
@@ -200,40 +305,48 @@
   };
 </script>
 
-{#each rows.filter((r) => r.i < bodyCount) as r (r.i)}
+{#each rowTabs as r (r.i)}
   <button
     class="tab row"
     class:on={selRows.has(r.i)}
-    style="top:{r.top}px;height:{r.height}px;left:{frameLeft - ROW_TAB - 4}px;width:{ROW_TAB}px;font-size:{fontFor(r.height)}px"
-    title={app.readonly ? 'Select row' : 'Select row · drag to move · drag onto the canvas for a new one (⌥ copies)'}
+    style="top:{r.top}px;height:{r.height}px;left:{pinned ? 3 : frameLeft - ROW_TAB - 4}px;width:{ROW_TAB}px;font-size:{fontFor(r.height)}px"
+    title={app.readonly ? 'Select row' : pinned ? 'Select row · drag to move' : 'Select row · drag to move · drag onto the canvas for a new one (⌥ copies)'}
     aria-label={`Row ${label(r.i)}`}
     onpointerdown={(e) => down(e, 'row', r.i)}
     oncontextmenu={(e) => context(e, 'row', r.i)}
     onpointermove={move}
     onpointerup={up}
-    onpointercancel={() => (drag = null)}
+    onpointercancel={cancel}
   >{label(r.i)}</button>
 {/each}
-{#each cols as c (c.i)}
+{#each colTabs as c (c.i)}
   <button
     class="tab col"
     class:on={selCols.has(c.i) && wholeLines('col').includes(c.i)}
-    style="left:{c.left}px;width:{c.width}px;top:{frameTop - COL_TAB - 3}px;height:{COL_TAB}px;font-size:{fontFor(c.width)}px"
-    title={canDragCols ? 'Select column · drag to move · drag onto the canvas for a new table (⌥ copies)' : 'Select column'}
+    style="left:{c.left}px;width:{c.width}px;top:{pinned ? bodyTop - COL_TAB - 3 : frameTop - COL_TAB - 3}px;height:{COL_TAB}px;font-size:{fontFor(c.width)}px"
+    title={!canDragCols ? 'Select column' : pinned ? 'Select column · drag to move' : 'Select column · drag to move · drag onto the canvas for a new table (⌥ copies)'}
     aria-label={`Column ${colLabel(c.i)}`}
     onpointerdown={(e) => down(e, 'col', c.i)}
     oncontextmenu={(e) => context(e, 'col', c.i)}
     onpointermove={move}
     onpointerup={up}
-    onpointercancel={() => (drag = null)}
+    onpointercancel={cancel}
   >{colLabel(c.i)}</button>
 {/each}
 
 {#if drag?.moved && !drag.outside && drag.to >= 0}
   {#if drag.axis === 'row'}
-    <div class="marker h" style="top:{drag.marker - 1}px;left:{box.left}px;width:{box.width}px"></div>
-  {:else}
-    <div class="marker v" style="left:{drag.marker - 1}px;top:{box.top}px;height:{box.height}px"></div>
+    {#if !pinned || (drag.marker >= clip.top - 2 && drag.marker <= clip.bottom + 2)}
+      <div
+        class="marker h"
+        style="top:{drag.marker - 1}px;left:{pinned ? clip.left : box.left}px;width:{pinned ? Math.min(box.width, clip.right - clip.left) : box.width}px"
+      ></div>
+    {/if}
+  {:else if !pinned || (drag.marker >= clip.afterFirst - 2 && drag.marker <= clip.right + 2)}
+    <div
+      class="marker v"
+      style="left:{drag.marker - 1}px;top:{pinned ? bodyTop : box.top}px;height:{pinned ? Math.min(box.height, clip.bottom - bodyTop) : box.height}px"
+    ></div>
   {/if}
 {/if}
 {#if drag?.moved && drag.outside}

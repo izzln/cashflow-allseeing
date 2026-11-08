@@ -26,6 +26,10 @@
     return { w: w + 400, h: h + 400 };
   });
 
+  $effect(() => {
+    if (maxTable) canvasEl?.scrollTo(0, 0);
+  });
+
   onMount(() => {
     app.contentEl = contentEl;
     app.editorEl = editorEl;
@@ -48,10 +52,21 @@
       const g = e as Event & { scale: number; clientX: number; clientY: number };
       void app.setZoom(base * g.scale, { x: g.clientX, y: g.clientY });
     };
+    // Size changes keep the person's place: the selection stays in view, the editor on its cell.
+    let first = true;
+    let raf = 0;
+    const ro = new ResizeObserver(() => {
+      if (first) return void (first = false);
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => app.keepPlace());
+    });
+    ro.observe(canvasEl);
     canvasEl.addEventListener('wheel', onWheel, { passive: false });
     canvasEl.addEventListener('gesturestart', onGestureStart);
     canvasEl.addEventListener('gesturechange', onGestureChange);
     return () => {
+      ro.disconnect();
+      cancelAnimationFrame(raf);
       canvasEl.removeEventListener('wheel', onWheel);
       canvasEl.removeEventListener('gesturestart', onGestureStart);
       canvasEl.removeEventListener('gesturechange', onGestureChange);
@@ -142,6 +157,8 @@
   .zoomer.filled {
     position: absolute;
     inset: 0;
+    /* The filled table scrolls inside itself; nothing (e.g. the parked cell editor) may scroll the canvas. */
+    overflow: clip;
   }
   .overlay {
     position: absolute;

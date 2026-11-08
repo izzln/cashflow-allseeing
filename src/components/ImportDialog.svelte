@@ -1,5 +1,6 @@
 <script lang="ts">
   import { untrack } from 'svelte';
+  import { fadeOut } from '../lib/motion';
   import { app } from '../lib/store.svelte';
   import { formatNumber } from '../lib/format';
   import { amountColumn, buildEntries, columnOf, guessMap } from '../lib/import/mapping';
@@ -83,8 +84,8 @@
   }
 </script>
 
-<div class="overlay" role="dialog" aria-modal="true" aria-label="Import into table">
-  <div class="dialog">
+<div class="overlay anim-scrim" role="dialog" aria-modal="true" aria-label="Import into table" out:fadeOut>
+  <div class="dialog anim-dialog">
     <h2>Import into “{dataTable.name}”</h2>
     <p class="file">{fileName}</p>
 
@@ -184,7 +185,7 @@
   .dialog {
     background: var(--panel);
     border-radius: var(--radius-12);
-    width: min(760px, 100%);
+    width: min(var(--dialog-w), 100%);
     padding: 18px 20px;
     box-shadow: var(--shadow-dialog);
   }
@@ -201,6 +202,15 @@
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
     gap: 10px 14px;
+  }
+  /* Compact: full width with 16px gutters, one field column. */
+  @media (max-width: 599px) {
+    .overlay {
+      padding: calc(16px + env(safe-area-inset-top)) 16px 16px;
+    }
+    .grid {
+      grid-template-columns: 1fr;
+    }
   }
   label {
     display: flex;

@@ -81,9 +81,36 @@ function lineCount(axis: 'row' | 'col'): number {
   return set.size;
 }
 
+/**
+ * The classic copy command, run inside the tap or click. Safari (iPad above all) is strict about
+ * the async Clipboard API, but lets a user gesture run "copy" when the page answers the copy
+ * event itself (see onBeforeClipboard in App). Returns false when the browser didn't run it.
+ */
+function execCopy(data: { text: string; html: string }): boolean {
+  let done = false;
+  const onCopy = (e: ClipboardEvent) => {
+    if (!e.clipboardData) return;
+    e.clipboardData.setData('text/plain', data.text);
+    e.clipboardData.setData('text/html', data.html);
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    done = true;
+  };
+  document.addEventListener('copy', onCopy, true);
+  try {
+    document.execCommand('copy');
+  } catch {
+    // Not supported: fall back to the Clipboard API.
+  } finally {
+    document.removeEventListener('copy', onCopy, true);
+  }
+  return done;
+}
+
 async function writeClipboard(): Promise<boolean> {
   const data = app.copyData();
   if (!data) return false;
+  if (execCopy(data)) return true;
   try {
     if ('ClipboardItem' in window) {
       await navigator.clipboard.write([
@@ -169,6 +196,13 @@ const list: Command[] = [
     else app.clearSelected();
   } },
   { id: 'edit.selectAll', label: 'Select All', keys: { key: 'a', mod: true }, enabled: () => !!focusTable(), run: () => app.selectAll() },
+
+  // Sheets (from a sheet tab's context menu; they act on the active sheet)
+  { id: 'sheet.rename', label: 'Rename Sheet', enabled: editable, run: () => void (app.renamingSheetId = app.activeSheetId) },
+  { id: 'sheet.duplicate', label: 'Duplicate Sheet', enabled: editable, run: () => app.duplicateSheet(app.activeSheetId) },
+  { id: 'sheet.moveLeft', label: 'Move Left', enabled: () => editable() && app.wb.sheets[0]?.id !== app.activeSheetId, run: () => app.moveSheet(app.activeSheetId, -1) },
+  { id: 'sheet.moveRight', label: 'Move Right', enabled: () => editable() && app.wb.sheets.at(-1)?.id !== app.activeSheetId, run: () => app.moveSheet(app.activeSheetId, 1) },
+  { id: 'sheet.delete', label: 'Delete Sheet', enabled: () => editable() && app.wb.sheets.length > 1, run: () => app.deleteSheet(app.activeSheetId) },
 
   // Insert
   { id: 'insert.cashflow', label: 'Cashflow', enabled: editable, run: () => app.addTable('cashflow') },
@@ -273,11 +307,12 @@ const FORMATS: MenuItem = { title: 'Column Format', items: (Object.keys(COLUMN_T
 const UNDO: MenuItem[] = ['edit.undo', 'edit.redo', '-'];
 const ALIGN: MenuItem = { title: 'Align', items: ['format.align.left', 'format.align.center', 'format.align.right'] };
 
-export type MenuTarget = 'cells' | 'table' | 'column' | 'rows' | 'columns';
+export type MenuTarget = 'cells' | 'table' | 'column' | 'rows' | 'columns' | 'sheet';
 
 /** Right-click / long-press menu. Undo and Redo are here so touch-only use has them. */
 export function contextItems(target: MenuTarget): MenuItem[] {
   const dataTable = dataTableFocused();
+  if (target === 'sheet') return [...UNDO, 'sheet.rename', 'sheet.duplicate', '-', 'sheet.moveLeft', 'sheet.moveRight', '-', 'sheet.delete'];
   if (target === 'table') return [...UNDO, 'edit.copy', 'edit.cut', '-', 'table.rename', 'table.duplicate', 'table.maximize', '-', 'table.delete'];
   if (target === 'rows') {
     return [...UNDO, 'insert.rowAbove', 'insert.rowBelow', '-', 'table.deleteRows', 'table.moveUp', 'table.moveDown', '-',

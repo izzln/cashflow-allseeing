@@ -1,5 +1,5 @@
 import { tick, untrack } from 'svelte';
-import { toHTML, toTSV, parseTSV } from './clipboard';
+import { toHTML, toTSV, parseTSV, type CellFormat } from './clipboard';
 import { Evaluator } from './evaluate';
 import { formatNumber, parseNumber } from './format';
 import {
@@ -24,6 +24,7 @@ import {
   type Align,
   type Table,
   type Workbook,
+  type Sheet,
 } from './model';
 import { parseMonth, visibleWindow } from './months';
 import { downloadText } from './download';
@@ -55,6 +56,8 @@ import { amountColumn } from './import/mapping';
 
 const SHEET_KEY = 'cashflow-allseeing.activeSheet.';
 const ZOOM_KEY = 'cashflow-allseeing.zoom.';
+/** Per file (and snapshot): which table fills the window on each sheet. */
+const FILL_KEY = 'cashflow-allseeing.filled.';
 export const ZOOM_MIN = 0.25;
 export const ZOOM_MAX = 4;
 export const ZOOM_STEPS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
@@ -125,13 +128,26 @@ class AppState {
   /** Table shown in the inspector (set by clicking a title or a cell). */
   focusTableId = $state<string | null>(null);
   // ---------- interface state shared by menus, toolbar and panels ----------
-  showInspector = $state(typeof window !== 'undefined' && window.innerWidth >= 1000);
+  /** Width of the app's own container (window or Split View pane), measured in App. */
+  width = $state(typeof window !== 'undefined' ? window.innerWidth : 1200);
+  /**
+   * Size class (Stories Web App: Responsive layout): compact < 600px (bottom sheets, ‹ only),
+   * regular < 900px (the Inspector overlays), wide (the Inspector docks).
+   */
+  get sizeClass(): 'compact' | 'regular' | 'wide' {
+    return this.width < 600 ? 'compact' : this.width < 900 ? 'regular' : 'wide';
+  }
+  showInspector = $state(typeof window !== 'undefined' && window.innerWidth >= 900);
+  /** Fill Window / Restore: the table's screen rectangle before the change, to zoom from. */
+  fillFrom: { id: string; rect: DOMRect } | null = null;
+  /** Bumped when tables finish moving without a data change (e.g. the Fill Window zoom), so tabs re-measure. */
+  layoutTick = $state(0);
   /** Table whose title is being renamed in place. */
   renamingTableId = $state<string | null>(null);
   /** Table column whose header is being renamed in place. */
   renamingColumn = $state<{ tableId: string; colId: string } | null>(null);
   /** An open context menu (right-click / long-press) or edit menu (after a tap), in viewport pixels. */
-  menu = $state<{ kind: 'context' | 'edit'; target: 'cells' | 'table' | 'column' | 'rows' | 'columns'; tableId: string; x: number; y: number } | null>(null);
+  menu = $state<{ kind: 'context' | 'edit'; target: 'cells' | 'table' | 'column' | 'rows' | 'columns' | 'sheet'; tableId: string; x: number; y: number } | null>(null);
   /** A spreadsheet being mapped in the import dialog. */
   importing = $state<{ tableId: string; fileName: string; sheets: SheetData[] } | null>(null);
   /** Table shown filling the whole workspace. */
@@ -144,6 +160,7 @@ class AppState {
   set maximizedId(id: string | null) {
     if (id) this.maxBySheet[this.activeSheetId] = id;
     else delete this.maxBySheet[this.activeSheetId];
+    if (this.file) writeStorage(this.fillKey(), JSON.stringify(this.maxBySheet));
   }
   /** Width available to the filled table (Fill Window), measured by its frame. */
   fillWidth = $state(0);
@@ -343,7 +360,17 @@ class AppState {
     this.focusTableId = null;
     this.editing = null;
     this.menu = null;
-    this.maxBySheet = {};
+    // Each sheet's filled table survives closing and reopening the file (like zoom and the sheet).
+    let filled: Record<string, string> = {};
+    try {
+      filled = JSON.parse(readStorage(this.fillKey()) ?? '{}') ?? {};
+    } catch {
+      filled = {};
+    }
+    this.maxBySheet = Object.fromEntries(
+      Object.entries(filled).filter(([sid, tid]) => wb.sheets.find((s) => s.id === sid)?.tables.some((t) => t.id === tid)),
+    );
+    this.focusTableId = this.maximizedId;
     this.filesCell = null;
     this.saveState = 'saved';
     if (snapshot) {
@@ -355,11 +382,16 @@ class AppState {
     }
   }
 
+  private fillKey(): string {
+    return FILL_KEY + (this.file?.id ?? '') + (this.snapshot ? '/' + this.snapshot.id : '');
+  }
+
   async close() {
     if (!this.file) return;
     this.sync.stop();
     this.commitEdit();
     await this.flush();
+    await this.commitSnapshotDelete();
     this.file = null;
     this.snapshot = null;
     this.snapshots = [];
@@ -375,7 +407,9 @@ class AppState {
   }
 
   async refreshSnapshots() {
-    this.snapshots = this.file ? await fileStore.listSnapshots(this.file.id) : [];
+    const list = this.file ? await fileStore.listSnapshots(this.file.id) : [];
+    const hidden = this.pendingSnapDelete?.snapId;
+    this.snapshots = list.filter((s) => s.id !== hidden);
   }
 
   async takeSnapshot(label: string) {
@@ -392,10 +426,50 @@ class AppState {
     }
   }
 
+  /** A snapshot deleted in this window, removed for good when its Undo notice expires. */
+  pendingSnapDelete = $state<{ fileId: string; snapId: string; label: string; timer: ReturnType<typeof setTimeout> } | null>(null);
+
+  undoSnapshotDelete() {
+    const p = this.pendingSnapDelete;
+    if (!p) return;
+    clearTimeout(p.timer);
+    this.pendingSnapDelete = null;
+    if (this.notice.startsWith('Deleted snapshot')) {
+      this.notice = '';
+      this.noticeAction = null;
+    }
+    void this.refreshSnapshots();
+  }
+
+  /** Delete a snapshot, undoably (Stories: prefer an undoable delete over a confirmation). */
   async deleteSnapshot(snapId: string) {
-    if (!this.file) return;
-    await fileStore.deleteSnapshot(this.file.id, snapId);
-    await this.refreshSnapshots();
+    const f = this.file;
+    const snap = this.snapshots.find((s) => s.id === snapId);
+    if (!f || !snap || this.readonly) return;
+    await this.commitSnapshotDelete();
+    const timer = setTimeout(() => void this.commitSnapshotDelete(), 6000);
+    this.pendingSnapDelete = { fileId: f.id, snapId, label: snap.label, timer };
+    this.snapshots = this.snapshots.filter((s) => s.id !== snapId);
+    this.flashNotice(`Deleted snapshot “${snap.label}”.`, 'info', {
+      label: 'Undo',
+      run: () => {
+        if (this.pendingSnapDelete?.snapId === snapId) this.undoSnapshotDelete();
+      },
+    });
+  }
+
+  /** Carry out a pending snapshot delete now (its notice expired, or the file is closing). */
+  async commitSnapshotDelete() {
+    const p = this.pendingSnapDelete;
+    if (!p) return;
+    clearTimeout(p.timer);
+    this.pendingSnapDelete = null;
+    try {
+      await fileStore.deleteSnapshot(p.fileId, p.snapId);
+    } catch {
+      this.flashNotice('Could not delete the snapshot. Check the connection and try again.');
+    }
+    if (this.file?.id === p.fileId) await this.refreshSnapshots();
   }
 
   /** Copy the snapshot shown in this window into a new, editable file. */
@@ -580,6 +654,35 @@ class AppState {
     this.flashNotice(`Deleted sheet “${this.wb.sheets[idx].name}”.`, 'info', { label: 'Undo', run: () => this.undo() });
     this.change(() => this.wb.sheets.splice(idx, 1));
     if (this.activeSheetId === id) this.setSheet(this.wb.sheets[Math.max(0, idx - 1)].id);
+  }
+
+  /** timeStamp of the press that closed the touch edit menu (so that tap doesn't reopen it). */
+  menuClosedAt = -1;
+  /** Sheet whose tab is being renamed in place (started from the tab or its menu). */
+  renamingSheetId = $state<string | null>(null);
+
+  /** Move a sheet so it sits before the sheet now at index `to` (or last). Used by tab drag & drop. */
+  moveSheetTo(id: string, to: number) {
+    const i = this.wb.sheets.findIndex((s) => s.id === id);
+    if (i < 0 || this.readonly) return;
+    const target = to > i ? to - 1 : to;
+    if (target === i || target < 0 || target >= this.wb.sheets.length) return;
+    this.change(() => {
+      const [s] = this.wb.sheets.splice(i, 1);
+      this.wb.sheets.splice(target, 0, s);
+    });
+  }
+
+  /** Copy a sheet (tables get new ids) right after the original, and show it. */
+  duplicateSheet(id: string) {
+    const i = this.wb.sheets.findIndex((s) => s.id === id);
+    if (i < 0 || this.readonly) return;
+    const copy = structuredClone($state.snapshot(this.wb.sheets[i])) as Sheet;
+    copy.id = uid();
+    copy.name = `${copy.name} copy`;
+    for (const t of copy.tables) t.id = uid();
+    this.change(() => this.wb.sheets.splice(i + 1, 0, copy));
+    this.setSheet(copy.id);
   }
 
   moveSheet(id: string, dir: -1 | 1) {
@@ -1298,12 +1401,17 @@ class AppState {
 
   /** Fill the workspace with the focused table, or go back to the canvas. */
   toggleMaximize(id?: string) {
+    const rectOf = (tid: string) => document.querySelector(`[data-frame="${tid}"] .table`)?.getBoundingClientRect();
     if (this.maximizedId && (!id || id === this.maximizedId)) {
+      const r = rectOf(this.maximizedId);
+      this.fillFrom = r ? { id: this.maximizedId, rect: r } : null;
       this.maximizedId = null;
       return;
     }
     const t = this.table(id ?? this.selection?.tableId ?? this.focusTableId);
     if (t) {
+      const r = rectOf(t.id);
+      this.fillFrom = r ? { id: t.id, rect: r } : null;
       this.maximizedId = t.id;
       this.focusTableId = t.id;
     }
@@ -1450,13 +1558,21 @@ class AppState {
     if (seed === undefined && t.kind === 'cashflow' && p.c > 0 && t.cellSources[`${m.rowId(p.r)}|${m.colKey(p.c)}`]) {
       this.flashNotice('This cell shows a dataTable total. Type a number to replace it, or change it in the panel.');
     }
-    const cell = this.contentEl?.querySelector<HTMLElement>(
-      `[data-t="${t.id}"][data-r="${p.r}"][data-c="${p.c}"]`,
-    );
-    if (!cell || !this.contentEl) return;
+    if (!this.placeEditor(t.id, p, m.alignRight(p.c))) return;
+    el.value = seed ?? m.raw(p);
+    this.editing = { tableId: t.id, rowId: m.rowId(p.r), c: p.c };
+    el.focus();
+    const end = el.value.length;
+    el.setSelectionRange(end, end);
+  }
+
+  /** Lay the cell editor over a cell. Returns false when the cell isn't on screen. */
+  private placeEditor(tableId: string, p: Pos, right: boolean): boolean {
+    const el = this.editorEl;
+    const cell = this.contentEl?.querySelector<HTMLElement>(`[data-t="${tableId}"][data-r="${p.r}"][data-c="${p.c}"]`);
+    if (!el || !cell || !this.contentEl) return false;
     const box = this.contentEl.getBoundingClientRect();
     const r = cell.getBoundingClientRect();
-    const right = m.alignRight(p.c);
     // The editor sits inside the (possibly zoomed) content, so convert screen pixels back.
     const z = this.maximizedId ? 1 : this.zoom;
     el.style.left = `${(r.left - box.left) / z}px`;
@@ -1464,11 +1580,28 @@ class AppState {
     el.style.width = `${Math.max(r.width / z, right ? 140 : 0)}px`;
     el.style.height = `${r.height / z}px`;
     el.style.textAlign = right ? 'right' : 'left';
-    el.value = seed ?? m.raw(p);
-    this.editing = { tableId: t.id, rowId: m.rowId(p.r), c: p.c };
-    el.focus();
-    const end = el.value.length;
-    el.setSelectionRange(end, end);
+    return true;
+  }
+
+  /**
+   * After a size change: keep the selection in view and the open editor over its cell
+   * (Stories: Adapting to size changes).
+   */
+  keepPlace() {
+    const sel = this.selection;
+    const t = this.table(sel?.tableId);
+    if (!sel || !t) return;
+    const m = this.model(t);
+    const ed = this.editing;
+    if (ed) {
+      let r = -1;
+      for (let i = 0; i < m.rows; i++) if (m.rowId(i) === ed.rowId) r = i;
+      if (r >= 0) this.placeEditor(t.id, { r, c: ed.c }, m.alignRight(ed.c));
+    }
+    const p = sel.anchor;
+    this.contentEl
+      ?.querySelector<HTMLElement>(`[data-t="${t.id}"][data-r="${p.r}"][data-c="${p.c}"]`)
+      ?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }
 
   commitEdit() {
@@ -1601,7 +1734,10 @@ class AppState {
 
   // ---------- clipboard ----------
 
-  /** The last selected range as text grids for the clipboard. */
+  /** What this window copied last: a paste of the same text restores its tints and alignment. */
+  private lastCopy: { text: string; formats: CellFormat[][] } | null = null;
+
+  /** The last selected range as text grids for the clipboard, with each cell's tint and alignment. */
   copyData(): { text: string; html: string } | null {
     const sel = this.selection;
     const t = this.table(sel?.tableId);
@@ -1610,22 +1746,36 @@ class AppState {
     const { r0, r1, c0, c1 } = bounds(sel.ranges[sel.ranges.length - 1]);
     const raw: string[][] = [];
     const shown: string[][] = [];
+    const formats: CellFormat[][] = [];
     for (let r = r0; r <= r1; r++) {
       const a: string[] = [];
       const b: string[] = [];
+      const f: CellFormat[] = [];
       for (let c = c0; c <= c1; c++) {
         const v = m.value({ r, c });
         a.push(v === null ? '' : String(v));
         b.push(typeof v === 'number' ? formatNumber(v) : v === null ? '' : v);
+        const k = styleKey(m.rowId(r), m.colKey(c));
+        const cell: CellFormat = {};
+        if (t.styles[k]) cell.s = t.styles[k];
+        if (t.aligns[k]) cell.a = t.aligns[k];
+        f.push(cell);
       }
       raw.push(a);
       shown.push(b);
+      formats.push(f);
     }
-    return { text: toTSV(raw), html: toHTML(shown) };
+    const text = toTSV(raw);
+    this.lastCopy = { text, formats };
+    return { text, html: toHTML(shown, formats) };
   }
 
-  /** Paste tab-separated text at the anchor cell. Adds rows when the block runs past the end. */
-  paste(text: string) {
+  /**
+   * Paste tab-separated text at the anchor cell. Adds rows when the block runs past the end.
+   * A block copied from this app also brings its tints and alignment (`formats`, or this
+   * window's last copy of the same text), as Paste does in Numbers.
+   */
+  paste(text: string, formats?: CellFormat[][] | null) {
     const sel = this.selection;
     const t = this.table(sel?.tableId);
     if (!sel || !t || this.readonly) return;
@@ -1638,6 +1788,7 @@ class AppState {
       this.flashNotice('Paste into a normal row, not a total or formula row.');
       return;
     }
+    const fmt = formats ?? (this.lastCopy?.text.replace(/\r/g, '') === text.replace(/\r/g, '') ? this.lastCopy.formats : null);
     let bad = 0;
     this.change(() => {
       grid.forEach((line, i) => {
@@ -1648,7 +1799,18 @@ class AppState {
         }
         line.forEach((cell, j) => {
           const p = { r: r0 + i, c: c0 + j };
-          if (p.c >= m.cols || m.editable(p) !== true) return;
+          if (p.c >= m.cols) return;
+          const f = fmt?.[i]?.[j];
+          if (f && p.r < m.body) {
+            const k = styleKey(m.rowId(p.r), m.colKey(p.c));
+            if (f.s) t.styles[k] = f.s;
+            else delete t.styles[k];
+            if (['text', 'date', 'label'].includes(m.cellType(p))) {
+              if (f.a && f.a !== 'left') t.aligns[k] = f.a;
+              else delete t.aligns[k];
+            }
+          }
+          if (m.editable(p) !== true) return;
           if (!m.set(p, cell)) bad++;
         });
       });

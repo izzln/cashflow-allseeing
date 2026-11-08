@@ -52,11 +52,28 @@
   --z-dialog: 3000;
   --z-overlay: 4000;
   --opacity-disabled: 0.4;
-  --touch-target: 44px;
+  --touch-target: 36px;
   --row-h: 28px;
   --control-h: 30px;
   --field-h: 32px;
   --title-h: 32px;
+  --topbar-h: 52px;
+  --inspector-w: 290px;
+  --popover-w: 340px;
+  --overflow-w: 260px;
+  --menu-min-w: 220px;
+  --dialog-w: 760px;
+  --page-w: 920px;
+  /* Height the software keyboard covers at the bottom (set from visualViewport in App). */
+  --kb-inset: 0px;
+
+  /* Motion (Stories Web App): brief, purposeful, interruptible. */
+  --motion-fast: 100ms;
+  --motion-base: 150ms;
+  --motion-dialog: 200ms;
+  --motion-panel: 250ms;
+  --ease-enter: cubic-bezier(0.2, 0, 0, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
 
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
     'Microsoft YaHei', sans-serif;
@@ -76,6 +93,10 @@ body,
   height: 100%;
   background: var(--bg);
   overflow: hidden;
+}
+/* Dynamic viewport height, so Safari's toolbars don't push content off screen. */
+#app {
+  height: 100dvh;
 }
 
 button,
@@ -103,13 +124,29 @@ button:disabled {
   cursor: default;
 }
 
+/* Focus follows the pointer, not Tab: buttons and menu rows show no focus ring; a focused text
+   field shows its accent border (Stories Web App: Input model). */
+button:focus,
+button:focus-visible,
+a:focus-visible,
+[role='menu']:focus,
+[role='dialog']:focus {
+  outline: none;
+}
+input:not([type='checkbox']):not([type='radio']):focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 /* Touch: controls grow to the touch target (Stories Web App). Components size controls with these
    tokens; :where() keeps this fallback weaker than any component rule. */
 @media (pointer: coarse) {
   :root {
-    --control-h: 44px;
-    --field-h: 44px;
-    --title-h: 44px;
+    --control-h: var(--touch-target);
+    --field-h: var(--touch-target);
+    --title-h: var(--touch-target);
   }
   :where(button, select, input:not([type='checkbox']):not([type='radio'])) {
     min-height: var(--touch-target);
@@ -118,4 +155,89 @@ button:disabled {
 
 button.danger {
   color: var(--neg);
+}
+
+/* ---------- Motion (Stories Web App: States → Motion) ---------- */
+@keyframes cf-grow-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes cf-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes cf-slide-up {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: none;
+  }
+}
+@keyframes cf-slide-in-end {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: none;
+  }
+}
+/* Popovers and the edit menu grow from their anchor; menus open instantly. */
+.anim-pop {
+  animation: cf-grow-in var(--motion-base) var(--ease-enter);
+  transform-origin: top right;
+}
+.anim-pop.from-left {
+  transform-origin: top left;
+}
+.anim-edit {
+  animation: cf-grow-in var(--motion-base) var(--ease-enter);
+  transform-origin: bottom center;
+}
+.anim-fade {
+  animation: cf-fade-in var(--motion-base) var(--ease-enter);
+}
+.anim-scrim {
+  animation: cf-fade-in var(--motion-dialog) var(--ease-enter);
+}
+.anim-dialog {
+  animation: cf-grow-in var(--motion-dialog) var(--ease-enter);
+}
+
+/* ---------- Compact width (< bp-compact, 600px): popovers become bottom sheets ---------- */
+@media (max-width: 599px) {
+  .sheet-compact {
+    position: fixed !important;
+    left: 8px !important;
+    right: 8px !important;
+    top: auto !important;
+    bottom: calc(8px + env(safe-area-inset-bottom) + var(--kb-inset)) !important;
+    width: auto !important;
+    max-width: none !important;
+    margin: 0 !important;
+    max-height: 60vh;
+    max-height: 60dvh;
+    overflow-y: auto;
+    z-index: var(--z-popover);
+    animation: cf-slide-up var(--motion-panel) var(--ease-enter);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .anim-pop,
+  .anim-edit,
+  .anim-dialog,
+  .sheet-compact {
+    animation-name: cf-fade-in;
+  }
 }

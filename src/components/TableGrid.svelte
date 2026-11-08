@@ -96,8 +96,7 @@
         <th
           data-t={table.id}
           data-h={c}
-          class:right={col.type === 'number'}
-          class:center={col.type === 'checkbox'}
+          class="center"
           class:wrap={wraps(c)}
           title={app.readonly ? col.name : `${col.name} — double-click to rename`}
           ondblclick={() => renameColumn(col.id)}

@@ -1,12 +1,25 @@
 <script lang="ts">
-  import { tick, type Snippet } from 'svelte';
+  import { onMount, tick, type Snippet } from 'svelte';
+  import { zoomFrom } from '../lib/motion';
   import { app } from '../lib/store.svelte';
   import { cellsInRanges, type Pos } from '../lib/grid';
   import type { Table } from '../lib/model';
+  import TableTabs from './TableTabs.svelte';
 
   let { table, children, maximized = false }: { table: Table; children: Snippet; maximized?: boolean } = $props();
   let frameEl = $state<HTMLElement | null>(null);
   let bodyWidth = $state(0);
+  let bodyEl = $state<HTMLElement | null>(null);
+  let pinsEl = $state<HTMLElement | null>(null);
+  let cardEl = $state<HTMLElement | null>(null);
+  // Fill Window / Restore: zoom from where the table was (Stories: Motion).
+  onMount(() => {
+    const from = app.fillFrom;
+    if (!from || from.id !== table.id || !cardEl) return;
+    app.fillFrom = null;
+    const anim = zoomFrom(cardEl, from.rect, maximized ? 1 : app.zoom);
+    anim?.finished.then(() => app.layoutTick++, () => app.layoutTick++);
+  });
   $effect(() => {
     if (maximized) app.fillWidth = bodyWidth;
   });
@@ -14,19 +27,25 @@
   const sel = $derived(app.selection?.tableId === table.id ? app.selection : null);
   const selected = $derived(new Set(sel ? cellsInRanges(sel.ranges).map((p) => `${p.r},${p.c}`) : []));
 
-  function isAnchor(p: Pos): boolean {
-    return !!sel && sel.anchor.r === p.r && sel.anchor.c === p.c;
-  }
 
   // ----- pointer handling -----
   // Mouse: press and drag selects a range; Shift extends; ⌘/Ctrl adds a range.
-  // Touch: tap selects (a drag on an unselected cell scrolls the canvas);
-  //        drag from a selected cell extends; tap the selected cell again to edit.
+  // Touch (as in Numbers): a tap selects (a drag on an unselected cell scrolls the canvas);
+  //        a tap on the selection shows or hides the edit menu; a double-tap edits;
+  //        a drag from a selected cell extends the selection.
 
   let dragging = false;
   let pendingTap: Pos | null = null;
-  let tapToEdit = false;
   let moved = false;
+  /** The last tap that selected or toggled a menu: a second tap on that cell soon after edits. */
+  let lastTap: { p: Pos; at: number } | null = null;
+  /** The menu was open when this touch began (the press closed it): the tap only hides it. */
+  let menuWasOpen = false;
+  const DOUBLE_TAP_MS = 350;
+
+  function isDoubleTap(p: Pos, at: number): boolean {
+    return !!lastTap && lastTap.p.r === p.r && lastTap.p.c === p.c && at - lastTap.at < DOUBLE_TAP_MS;
+  }
   let pressTimer: ReturnType<typeof setTimeout> | null = null;
   let pressed = false;
 
@@ -49,7 +68,6 @@
     pressTimer = setTimeout(() => {
       pressed = true;
       pendingTap = null;
-      tapToEdit = false;
       if (!selected.has(`${p.r},${p.c}`)) app.select(table.id, p);
       openMenu('context', 'cells', clientX, clientY);
     }, 550);
@@ -72,12 +90,14 @@
     if (app.editing) app.commitEdit();
     moved = false;
     if (e.pointerType === 'touch') {
+      menuWasOpen = app.menuClosedAt === e.timeStamp;
       startPress(e, p);
       if (!selected.has(`${p.r},${p.c}`)) {
         pendingTap = p;
         return;
       }
-      tapToEdit = isAnchor(p) && selected.size === 1;
+      pendingTap = null;
+      tapped = p;
       dragging = true;
     } else {
       if (e.button === 2) return; // right-click: handled by the contextmenu event
@@ -111,23 +131,42 @@
     }
   }
 
+  /** The selected cell a touch began on. */
+  let tapped: Pos | null = null;
+
   function onUp(e: PointerEvent) {
     window.removeEventListener('pointermove', onMove);
     cancelPress();
     dragging = false;
+    const p = tapped;
+    tapped = null;
     if (pressed) {
       pressed = false;
       return;
     }
-    if (tapToEdit && !moved) {
-      app.menu = null;
-      app.startEdit();
-    } else if (e.pointerType === 'touch' && sel) {
+    if (e.pointerType !== 'touch' || !sel) return;
+    if (moved) {
       // A drag from a selected cell extended the selection: show the edit menu for it.
       const pt = cellPoint(sel.anchor);
       openMenu('edit', 'cells', pt.x, pt.y);
+      return;
     }
-    tapToEdit = false;
+    if (!p) return;
+    if (isDoubleTap(p, e.timeStamp)) {
+      // Double-tap: edit (focus inside this event so the iPad keyboard appears).
+      lastTap = null;
+      app.menu = null;
+      if (!(e.target as Element).closest?.('[data-check]')) {
+        app.select(table.id, p);
+        app.startEdit();
+      }
+      return;
+    }
+    lastTap = { p, at: e.timeStamp };
+    if (menuWasOpen) return; // this tap only hid the menu
+    // A tap on the selection shows the edit menu for it.
+    const pt = cellPoint(sel.anchor);
+    openMenu('edit', 'cells', pt.x, pt.y);
   }
 
   function onTouchUp(e: PointerEvent) {
@@ -140,11 +179,11 @@
     }
     const p = posOf(e.target as Element);
     if (p && p.r === pendingTap.r && p.c === pendingTap.c) {
+      // A tap only selects, as in Numbers on iPad; a second tap shows the edit menu.
+      app.menu = null;
       app.select(table.id, p);
       if ((e.target as Element).closest('[data-check]')) app.toggleCheckboxes([p]);
-      // A tap selects and shows the edit menu (Numbers on iPad).
-      const pt = cellPoint(p);
-      openMenu('edit', 'cells', pt.x, pt.y);
+      lastTap = { p, at: e.timeStamp };
     }
     pendingTap = null;
   }
@@ -171,10 +210,16 @@
 
   let titlePointer = 'mouse';
 
+  /** The table was already selected (and its menu shut or not) when the title was pressed. */
+  let titleWasSelected = false;
+  let titleMenuWasOpen = false;
+
   function onTitleDown(e: PointerEvent) {
     if ((e.target as HTMLElement).closest('button, input')) return;
     e.preventDefault();
     app.commitEdit();
+    titleMenuWasOpen = app.menuClosedAt === e.timeStamp || (app.menu?.kind === 'edit' && app.menu.target === 'table');
+    titleWasSelected = !app.selection && app.focusTableId === table.id;
     app.menu = null;
     titlePointer = e.pointerType;
     if (e.button === 2) return;
@@ -207,7 +252,8 @@
     if (wasMove) app.save();
     if (moveStart && !wasMove && e.type === 'pointerup') {
       selectTable();
-      if (titlePointer === 'touch') {
+      // Touch: the first tap selects the table; a tap on the selected table shows its menu.
+      if (titlePointer === 'touch' && titleWasSelected && !titleMenuWasOpen) {
         const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
         openMenu('edit', 'table', r.left + Math.min(r.width, 300) / 2, r.top);
       }
@@ -234,7 +280,7 @@
 </script>
 
 <div class="frame" data-frame={table.id} class:max={maximized} bind:this={frameEl} style={maximized ? '' : `left:${table.x}px;top:${table.y}px`}>
-<div class="table" class:focused={app.focusTableId === table.id && !maximized}>
+<div class="table" bind:this={cardEl} class:focused={app.focusTableId === table.id && !maximized}>
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
     class="title"
@@ -279,6 +325,7 @@
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
     class="body"
+    bind:this={bodyEl}
     bind:clientWidth={bodyWidth}
     style="--row-h:28px"
     class:has-sel={!!sel}
@@ -293,6 +340,12 @@
   >
     {@render children()}
   </div>
+  {#if maximized}
+    <!-- Fill Window: row and column tabs in a fixed gutter, following the body's scroll. -->
+    <div class="pins" bind:this={pinsEl}>
+      {#if pinsEl && bodyEl}<TableTabs {table} layer={pinsEl} pinned scroller={bodyEl} />{/if}
+    </div>
+  {/if}
 </div>
 </div>
 
@@ -313,6 +366,11 @@
   }
   .frame.max .body {
     flex: 1;
+    min-height: 0;
+    /* Room for the pinned row and column tabs. */
+    margin: calc(var(--col-tab) + 6px) 0 0 calc(var(--row-tab) + 6px);
+    border-top: 1px solid var(--line);
+    border-left: 1px solid var(--line);
     overflow: auto;
     -webkit-overflow-scrolling: touch;
   }
@@ -344,6 +402,25 @@
   .frame.max .body :global(thead th:first-child) {
     left: 0;
     z-index: 3;
+  }
+  .frame {
+    --row-tab: 20px;
+    --col-tab: 15px;
+  }
+  @media (pointer: coarse) {
+    .frame {
+      --row-tab: 30px;
+      --col-tab: 23px;
+    }
+  }
+  .pins {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    overflow: hidden;
+  }
+  .pins :global(*) {
+    pointer-events: auto;
   }
   .grow {
     flex: 1;

@@ -23,17 +23,29 @@ Stories Web App wins.** Don't copy its rules here; this file only adds what is s
   `src/components/Toolbar.svelte`.
 - Cashflow markers: ⇄ from a table (`#1d63c7`), ƒ formula (`#6941c6`), negative in a linked/formula cell (`#b8336a`),
   ✎ number typed over a linked row (`#b54708`), `#ERR` for a formula/source error (reason in tooltip and Inspector).
+- **Touch selection (owner's decision, like Numbers; Stories' Input model says a tap also shows the EditMenu):**
+  the first tap on a cell, row/column tab or table title only selects; a tap on the selection shows or hides the
+  EditMenu; a double-tap edits. `app.menuClosedAt` lets the tap that closed the menu not reopen it.
 - Cashflow grid: label column 200px, month columns 100px, two header rows (year, month; centred).
+  Header-row text is always centred in both kinds of table (owner's decision), whatever the column type.
 - Canvas: tables snap to a 20px grid; a 40px margin surrounds the zoomed canvas. Zoom 25–400 %
   (steps 25, 50, 75, 100, 125, 150, 200, 300, 400). Row/column tabs live on an unscaled overlay with a fixed
   thickness (rows 20px / 30px touch, columns 15px / 23px touch).
 - Fill Window (one table fills the canvas, headers and first column pinned): Esc never leaves it; only Restore does.
-  Each sheet remembers its filled table. Columns are fitted to the width (`fitColumns` in `src/lib/grid.ts`):
+  Each sheet remembers its filled table, per file across closing it (localStorage, like zoom and the active
+  sheet). Fill / Restore zooms the card from its old rectangle (`app.fillFrom`, `zoomFrom` in `src/lib/motion.ts`). Columns are fitted to the width (`fitColumns` in `src/lib/grid.ts`):
   text, files and row labels wrap and give up width first; numbers, dates and checkboxes never wrap.
+  Row/column tabs are pinned in a gutter left of and above the scrolling body (`TableTabs` with `pinned`): they
+  follow its scroll, hide under the pinned headers, and drags only reorder (no drag-out), scrolling near an edge.
 - Text alignment (Left / Center / Right) applies to text, date and row-label cells only, per cell
   (`aligns`, keyed like `styles`); ⌘{ ⌘| ⌘}, the Format popover, the Align submenu and the Inspector.
-- Undoable deletes (rows, columns, tables, sheets) show a notice with Undo; irreversible ones (files,
-  snapshots) confirm in place.
+- Deletes are undoable and show a notice with Undo. Files (Home) and snapshots (File menu, which also shows Undo
+  in place) are removed for good only when the notice expires or the page/file closes.
+- Clipboard: copy writes TSV plus HTML whose cells carry `data-cf-s` / `data-cf-a` (tint, alignment), so a paste
+  into this app restores them (`formatsFromHTML`; the Clipboard-API paste matches this window's last copy).
+  Safari needs `beforecopy/beforecut/beforepaste` cancelled (App) to fire clipboard events for a grid
+  selection; menu Copy runs `execCommand('copy')` first, then the async Clipboard API.
+- Size class: `app.sizeClass` from the measured container width (`app.width`); CSS uses `max-width: 599px`.
 
 ## Commands
 - `npm test` (vitest, tests/), `npm run check` (svelte-check + worker tsc), `npm run build`
