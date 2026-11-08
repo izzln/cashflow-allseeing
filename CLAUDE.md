@@ -1,39 +1,30 @@
 # CLAUDE.md
 
-Cash-flow tracker/forecast web app. Numbers-like UI: top sheet tabs, free-placed (grid-snapped) tables,
-months as columns. Single editor (the owner) on Mac + iPad; others will get view-only links (last phase).
+Cash-flow tracker/forecast web app: sheets of free-placed (grid-snapped) tables on a canvas, months as columns.
+Single editor (the owner) on Mac + iPad; others will get view-only links (last phase).
 
 ## Names
 A **Cashflow** is the special month-by-month table (`CashflowTable`, `kind: 'cashflow'`). A **Table** is rows with
 typed columns (`DataTable`, `kind: 'table'`; its rows are `entries`). `Table` in code means either kind.
 There are no saved files to stay compatible with yet, so formats can still change freely.
 
-## UI rules (apply to every change)
-- Apple's Human Interface Guidelines (macOS and iPadOS) are the default:
-  https://developer.apple.com/design/human-interface-guidelines. Deviate only where our design is better for
-  this app, and record the deviation below.
-- Every command must work with mouse + keyboard, with the keyboard alone, and with touch alone
-  (no hover-only controls, no right-click or modifier keys required, touch targets ≥ 44 pt).
-- Pointer vs touch behaves like Numbers: a click on a table or cell only selects it; a tap selects it and
-  shows the edit menu (Cut, Copy, Paste, Delete…). Right-click (or long-press) opens the context menu.
-  Tapping elsewhere dismisses the edit menu and the tap still goes through.
-- Use Numbers' keyboard shortcuts where Numbers has one (⌥↑/⌥↓ insert row above/below, ⌥←/⌥→ insert column
-  before/after, …), and show shortcuts in menus. All commands live in `src/lib/commands.ts`.
-- Edit in place (double-click / tap again) rather than in modal prompts.
-- Layout: one top row — ‹ Files, file name (File menu) + save status, then the toolbar on the right;
-  sheet tabs on the row below.
-- Toolbar: icons grouped by purpose; related settings (cell fill + text colour) are one control that opens
-  a popover. As the window narrows: labels go first, then items move into a » overflow menu in
-  `OVERFLOW_ORDER` (least used first); the Inspector button always stays.
+## Design system: Stories Web App
+All UI rules, tokens, components, HIG deviations and known gaps come from the **Stories Web App** design system:
+https://claude.ai/artifact/MP8LwEVe4W4Ffw9RFyb7ij (a private Design System artifact; read it with the Artifact tool,
+`action: "read"` with `path`). Before UI work read `project/README.md`, `project/tokens.json` and the
+`project/components/<Name>/README.md` of each component you touch. **Where this file or the code disagrees with it,
+Stories Web App wins.** Don't copy its rules here; this file only adds what is specific to this app.
 
-### Deliberate deviations from HIG
-- No in-page menu bar: a web page can't use the real macOS / iPadOS menu bar, and a fake one duplicates
-  the toolbar. File commands live in a menu on the file name (like a document title menu); everything
-  else is in the toolbar, context menus and the edit menu.
-- No Undo/Redo or Copy/Paste toolbar buttons: they are on the keyboard (⌘Z, ⇧⌘Z, ⌘C, ⌘V) and in the
-  context/edit menus, so touch-only use still has them.
-- Esc never leaves the filled (maximized) table view; only its Restore button does.
-- Corner triangles in cells are reserved for comments (planned). Data links use the ⇄ symbol.
+### App-specific UI (not in the design system)
+- Commands are defined once in `src/lib/commands.ts`; the toolbar's overflow order is `OVERFLOW_ORDER` in
+  `src/components/Toolbar.svelte`.
+- Cashflow markers: ⇄ from a table (`#1d63c7`), ƒ formula (`#6941c6`), negative in a linked/formula cell (`#b8336a`),
+  ✎ number typed over a linked row (`#b54708`), `#ERR` for a formula/source error (reason in tooltip and Inspector).
+- Cashflow grid: label column 200px, month columns 100px, two header rows (year, month; centred).
+- Canvas: tables snap to a 20px grid; a 40px margin surrounds the zoomed canvas. Zoom 25–400 %
+  (steps 25, 50, 75, 100, 125, 150, 200, 300, 400). Row/column tabs live on an unscaled overlay with a fixed
+  thickness (rows 20px / 30px touch, columns 15px / 23px touch).
+- Fill Window (one table fills the canvas, headers and first column pinned): Esc never leaves it; only Restore does.
 
 ## Commands
 - `npm test` (vitest, tests/), `npm run check` (svelte-check + worker tsc), `npm run build`
@@ -41,7 +32,7 @@ There are no saved files to stay compatible with yet, so formats can still chang
 
 ## Layout
 - `src/lib/months.ts` — 'YYYY-MM' month keys; visible window = current month → Dec next year
-- `src/lib/evaluate.ts` — `Evaluator`: every computed cell (manual / ledger source / formula rows, net cash flow,
+- `src/lib/evaluate.ts` — `Evaluator`: every computed cell (manual / table source / formula rows, net cash flow,
   balance carried from openingMonth incl. hidden months, footer formulas); memoized, cycle-safe, errors as `{err}`
 - `src/lib/formula.ts` — formula tokenizer/parser/evaluator (`[Row]`, `[Table].[Row]`, PREV, SUM…; full-width input)
 - `src/lib/dates.ts`, `src/lib/import/` — date parsing, CSV (GBK fallback), minimal .xlsx reader, column mapping
@@ -55,7 +46,7 @@ There are no saved files to stay compatible with yet, so formats can still chang
   schema in `migrations/`. The Worker never parses workbook JSON (free-plan CPU limit); it stores it as text.
   It also serves the built app, embedded by `scripts/embed-assets.mjs` into `worker/static.generated.ts`
   (generated, gitignored) with a strict CSP. Deploy: `npm run deploy` (needs CLOUDFLARE_API_TOKEN)
-- `src/lib/files.ts` — files: `FileStore` interface (async; phase 3 adds a Cloudflare version),
+- `src/lib/files.ts` — files: `FileStore` interface (async; `RemoteFileStore` is the server version),
   `LocalFileStore` over localStorage, per-file `rev`, in-file snapshots (manual + month-end), export format
 - `src/lib/merge.ts` — 3-way JSON merge (objects by key, id'd arrays by id); used for multi-window edits and undo
 - `src/lib/model.ts` — Workbook/Sheet/Table types: `Table = CashflowTable | DataTable` (by `kind`); data tables have
@@ -84,6 +75,5 @@ There are no saved files to stay compatible with yet, so formats can still chang
   deltas and drop points with `/ app.zoom`. Row/column tabs are measured in screen pixels on the overlay.
 - Outflows are negative numbers. Amounts are stored per month on the row; months outside the window are kept.
   On a source row, `values` are manual overrides. Formula rows count toward net cash flow; footer formulas don't.
-- The cell editor is one persistent `<input>` focused synchronously inside the input event
-  (needed for the iPad keyboard to appear). Ignore Enter while an IME is composing.
+- The cell editor is one persistent `<input>` laid over the cell (the design system's focus/IME rules apply).
 - Keep dependencies minimal; prefer small in-house code over UI/grid libraries.

@@ -20,7 +20,7 @@ Two kinds of table sit on each sheet's canvas:
 - Formulas: `[Row]`, `[Table].[Row]`, `[Net cash flow]`, `[Balance]`, `PREV([x], n)`, `SUM MIN MAX
   ABS ROUND IF`; Chinese full-width input works. Errors show as `#ERR` with the reason
 
-**Interface (Apple HIG by default; deviations listed in CLAUDE.md)**
+**Interface** (follows the Stories Web App design system; see CLAUDE.md)
 - Top row: ‹ Files · file name (menu: Rename, Download a Copy, Take Snapshot, snapshots, All Files) and
   save status · toolbar on the right — Cashflow, Table · rows and columns · Color (fill + text sets) ·
   Fill Window, Zoom · Inspector. Narrow windows drop the labels, then move tools into a » menu.
