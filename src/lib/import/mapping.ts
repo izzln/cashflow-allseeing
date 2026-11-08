@@ -1,7 +1,7 @@
 import { detectDateOrder, parseDate } from '../dates';
 import { parseNumber } from '../format';
-import { parseBool } from '../ledger';
-import { uid, type CellData, type Entry, type ImportMap, type LedgerColumn } from '../model';
+import { parseBool } from '../columns';
+import { uid, type CellData, type Entry, type ImportMap, type Column } from '../model';
 
 type Role = 'date' | 'amount' | 'income' | 'expense' | 'category' | 'note';
 
@@ -16,13 +16,13 @@ const SYNONYMS: Record<Role, string[]> = {
 
 const clean = (s: string) => s.trim().toLowerCase().replace(/[\s:：_]+/g, ' ').replace(/[（(].*?[)）]/g, '').trim();
 
-/** The ledger's main number column: the one money-in/money-out columns can fill. */
-export function amountColumn(columns: LedgerColumn[]): LedgerColumn | undefined {
+/** The dataTable's main number column: the one money-in/money-out columns can fill. */
+export function amountColumn(columns: Column[]): Column | undefined {
   return columns.find((c) => c.id === 'amount' && c.type === 'number') ?? columns.find((c) => c.type === 'number');
 }
 
-/** Guess which file column feeds which ledger column, from the header row. */
-export function guessMap(header: string[], columns: LedgerColumn[]): Pick<ImportMap, 'cols' | 'split'> {
+/** Guess which file column feeds which dataTable column, from the header row. */
+export function guessMap(header: string[], columns: Column[]): Pick<ImportMap, 'cols' | 'split'> {
   const used = new Set<number>();
   const cols = header.map(clean);
   const pick = (names: string[]): string => {
@@ -43,7 +43,7 @@ export function guessMap(header: string[], columns: LedgerColumn[]): Pick<Import
     if (income && expense) split = { col: amount.id, income, expense };
     else if (income || expense) out[amount.id] = income || expense;
   }
-  // Columns named exactly like a ledger column win; then the built-in synonyms.
+  // Columns named exactly like a dataTable column win; then the built-in synonyms.
   for (const c of columns) {
     if (c.type === 'files' || out[c.id] || split?.col === c.id) continue;
     const exact = pick([c.name]);
@@ -74,10 +74,10 @@ export interface BuildResult {
 }
 
 /**
- * Turn spreadsheet rows into ledger entries. A row is skipped when the ledger's
+ * Turn spreadsheet rows into dataTable entries. A row is skipped when the dataTable's
  * first date column or main number column is mapped but has no valid value.
  */
-export function buildEntries(rows: string[][], map: ImportMap, columns: LedgerColumn[]): BuildResult {
+export function buildEntries(rows: string[][], map: ImportMap, columns: Column[]): BuildResult {
   const header = map.hasHeader ? (rows[0] ?? []) : [];
   const data = map.hasHeader ? rows.slice(1) : rows;
   const idx = (v: string) => columnOf(v, header, map.hasHeader);

@@ -1,6 +1,6 @@
 import { parseDate } from './dates';
 import { formatNumber, parseNumber } from './format';
-import type { Attachment, CellData, ColumnType, Entry, Filter, LedgerColumn, LedgerTable } from './model';
+import type { Attachment, CellData, ColumnType, Entry, Filter, Column, DataTable } from './model';
 
 export const COLUMN_TYPE_LABELS: Record<ColumnType, string> = {
   date: 'Date',
@@ -78,7 +78,7 @@ export function convertCell(from: ColumnType, to: ColumnType, v: CellData): Cell
   return out === null ? undefined : out;
 }
 
-export function firstColumnOf(l: LedgerTable, type: ColumnType): LedgerColumn | undefined {
+export function firstColumnOf(l: DataTable, type: ColumnType): Column | undefined {
   return l.columns.find((c) => c.type === type);
 }
 
@@ -102,7 +102,7 @@ export function matchesFilters(e: Entry, filters: Filter[]): boolean {
 }
 
 /** Distinct values of a text column, most used first. */
-export function distinctValues(l: LedgerTable, colId: string): { name: string; count: number }[] {
+export function distinctValues(l: DataTable, colId: string): { name: string; count: number }[] {
   const counts = new Map<string, { name: string; count: number }>();
   for (const e of l.entries) {
     const v = e.cells[colId];
@@ -115,8 +115,8 @@ export function distinctValues(l: LedgerTable, colId: string): { name: string; c
   return [...counts.values()].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
 }
 
-/** A ledger column id that isn't taken yet. */
-export function newColumnId(l: LedgerTable): string {
+/** A dataTable column id that isn't taken yet. */
+export function newColumnId(l: DataTable): string {
   let i = l.columns.length + 1;
   while (l.columns.some((c) => c.id === `c${i}`)) i++;
   return `c${i}`;

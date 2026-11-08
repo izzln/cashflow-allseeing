@@ -1,6 +1,6 @@
 import { app } from './store.svelte';
 import { readSpreadsheet } from './import/xlsx';
-import { COLUMN_TYPE_LABELS } from './ledger';
+import { COLUMN_TYPE_LABELS } from './columns';
 import type { ColumnType } from './model';
 import { STYLES } from './styles';
 
@@ -40,14 +40,18 @@ const KEY_GLYPH: Record<string, string> = {
 export function shortcutText(k: Keys | undefined): string {
   if (!k) return '';
   const key = KEY_GLYPH[k.key] ?? k.key.toUpperCase();
+  if (k.key === '>' || k.key === '<') return isMac ? `⌘${k.key}` : `Ctrl+${k.key}`;
   if (isMac) return `${k.ctrl ? '⌃' : ''}${k.alt ? '⌥' : ''}${k.shift ? '⇧' : ''}${k.mod ? '⌘' : ''}${key}`;
   return [k.ctrl && 'Ctrl', k.mod && 'Ctrl', k.alt && 'Alt', k.shift && 'Shift', key].filter(Boolean).join('+');
 }
 
+const SHIFTED: Record<string, string> = { '.': '>', ',': '<' };
+
 function matches(k: Keys, e: KeyboardEvent): boolean {
   const mod = isMac ? e.metaKey : e.ctrlKey;
+  const key = e.shiftKey ? (SHIFTED[e.key] ?? e.key) : e.key;
   return (
-    e.key.toLowerCase() === k.key.toLowerCase() &&
+    key.toLowerCase() === k.key.toLowerCase() &&
     !!k.mod === mod &&
     !!k.alt === e.altKey &&
     !!k.shift === e.shiftKey &&
@@ -62,7 +66,20 @@ const editable = () => !!app.file && !app.readonly;
 const hasSel = () => !!app.selection;
 const focusTable = () => app.table(app.selection?.tableId ?? app.focusTableId);
 const tableSelectedOnly = () => !app.selection && !!app.focusTableId;
-const ledgerFocused = () => focusTable()?.kind === 'ledger';
+const dataTableFocused = () => focusTable()?.kind === 'table';
+const deleteTableLabel = () => (focusTable()?.kind === 'cashflow' ? 'Delete Cashflow' : 'Delete Table');
+/** Whole rows or columns selected with the row/column tabs. */
+const linesSelected = () => !!app.selection?.lines;
+function lineCount(axis: 'row' | 'col'): number {
+  const sel = app.selection;
+  if (!sel) return 0;
+  const set = new Set<number>();
+  for (const g of sel.ranges) {
+    const [a, b] = axis === 'row' ? [g.a.r, g.b.r] : [g.a.c, g.b.c];
+    for (let i = Math.min(a, b); i <= Math.max(a, b); i++) set.add(i);
+  }
+  return set.size;
+}
 
 async function writeClipboard(): Promise<boolean> {
   const data = app.copyData();
@@ -96,7 +113,7 @@ function selectWholeTable() {
   }
 }
 
-export function pickImportFile(ledgerId: string) {
+export function pickImportFile(tableId: string) {
   const input = document.createElement('input');
   input.type = 'file';
   input.accept = '.csv,.tsv,.txt,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
@@ -106,7 +123,7 @@ export function pickImportFile(ledgerId: string) {
     try {
       const sheets = (await readSpreadsheet(file.name, new Uint8Array(await file.arrayBuffer()))).filter((s) => s.rows.length);
       if (!sheets.length) throw new Error('The file has no data.');
-      app.importing = { ledgerId, fileName: file.name, sheets };
+      app.importing = { tableId, fileName: file.name, sheets };
     } catch (err) {
       alert(err instanceof Error ? err.message : String(err));
     }
@@ -150,42 +167,42 @@ const list: Command[] = [
       app.flashNotice(`Paste was blocked by the browser. Use ${shortcutText({ key: 'v', mod: true })} instead.`);
     }
   } },
-  { id: 'edit.delete', label: () => (tableSelectedOnly() ? 'Delete Table' : 'Delete'), keys: { key: 'Backspace' }, enabled: () => editable() && (hasSel() || tableSelectedOnly()), run: () => {
+  { id: 'edit.delete', label: () => (tableSelectedOnly() ? deleteTableLabel() : linesSelected() ? 'Clear' : 'Delete'), keys: { key: 'Backspace' }, enabled: () => editable() && (hasSel() || tableSelectedOnly()), run: () => {
     if (tableSelectedOnly()) app.deleteTable(app.focusTableId!);
     else app.clearSelected();
   } },
   { id: 'edit.selectAll', label: 'Select All', keys: { key: 'a', mod: true }, enabled: () => !!focusTable(), run: () => app.selectAll() },
 
   // Insert
-  { id: 'insert.table', label: 'Table', enabled: editable, run: () => app.addTable('cashflow') },
-  { id: 'insert.ledger', label: 'Ledger', enabled: editable, run: () => app.addTable('ledger') },
+  { id: 'insert.cashflow', label: 'Cashflow', enabled: editable, run: () => app.addTable('cashflow') },
+  { id: 'insert.dataTable', label: 'Table', enabled: editable, run: () => app.addTable('table') },
   { id: 'insert.rowAbove', label: 'Row Above', keys: { key: 'ArrowUp', alt: true }, enabled: () => editable() && !!focusTable(), run: () => app.insertRow('above') },
   { id: 'insert.rowBelow', label: 'Row Below', keys: { key: 'ArrowDown', alt: true }, enabled: () => editable() && !!focusTable(), run: () => app.insertRow('below') },
-  { id: 'insert.colBefore', label: 'Column Before', keys: { key: 'ArrowLeft', alt: true }, enabled: () => editable() && ledgerFocused(), run: () => app.insertColumnAt('before') },
-  { id: 'insert.colAfter', label: 'Column After', keys: { key: 'ArrowRight', alt: true }, enabled: () => editable() && ledgerFocused(), run: () => app.insertColumnAt('after') },
+  { id: 'insert.colBefore', label: 'Column Before', keys: { key: 'ArrowLeft', alt: true }, enabled: () => editable() && dataTableFocused(), run: () => app.insertColumnAt('before') },
+  { id: 'insert.colAfter', label: 'Column After', keys: { key: 'ArrowRight', alt: true }, enabled: () => editable() && dataTableFocused(), run: () => app.insertColumnAt('after') },
   { id: 'insert.footer', label: 'Footer Formula Row', enabled: () => editable() && focusTable()?.kind === 'cashflow', run: () => app.addFooter(focusTable()!.id) },
 
   // Table
-  { id: 'table.rename', label: 'Rename Table', enabled: () => editable() && !!focusTable(), run: () => void (app.renamingTableId = focusTable()!.id) },
-  { id: 'table.maximize', label: () => (app.maximizedId ? 'Restore Table Size' : 'Fill Window with Table'), enabled: () => !!focusTable() || !!app.maximizedId, run: () => app.toggleMaximize() },
-  { id: 'table.deleteRows', label: 'Delete Rows', keys: { key: 'Backspace', mod: true, alt: true }, enabled: () => editable() && hasSel(), run: () => app.deleteSelectedRows() },
-  { id: 'table.deleteColumns', label: 'Delete Columns', enabled: () => editable() && hasSel() && ledgerFocused(), run: () => app.deleteSelectedColumns() },
+  { id: 'table.rename', label: 'Rename', enabled: () => editable() && !!focusTable(), run: () => void (app.renamingTableId = focusTable()!.id) },
+  { id: 'table.maximize', label: () => (app.maximizedId ? 'Restore Size' : 'Fill Window'), enabled: () => !!focusTable() || !!app.maximizedId, run: () => app.toggleMaximize() },
+  { id: 'table.deleteRows', label: () => (lineCount('row') === 1 ? 'Delete Row' : 'Delete Rows'), keys: { key: 'Backspace', mod: true, alt: true }, enabled: () => editable() && hasSel(), run: () => app.deleteSelectedRows() },
+  { id: 'table.deleteColumns', label: () => (lineCount('col') === 1 ? 'Delete Column' : 'Delete Columns'), enabled: () => editable() && hasSel() && dataTableFocused(), run: () => app.deleteSelectedColumns() },
   { id: 'table.moveUp', label: 'Move Row Up', enabled: () => editable() && hasSel(), run: () => app.moveSelectedRow(-1) },
   { id: 'table.moveDown', label: 'Move Row Down', enabled: () => editable() && hasSel(), run: () => app.moveSelectedRow(1) },
-  { id: 'table.renameColumn', label: 'Rename Column', enabled: () => editable() && ledgerFocused() && hasSel(), run: () => {
+  { id: 'table.renameColumn', label: 'Rename Column', enabled: () => editable() && dataTableFocused() && hasSel(), run: () => {
     const t = focusTable();
-    if (t?.kind === 'ledger' && app.selection) app.renamingColumn = { tableId: t.id, colId: t.columns[app.selection.anchor.c].id };
+    if (t?.kind === 'table' && app.selection) app.renamingColumn = { tableId: t.id, colId: t.columns[app.selection.anchor.c].id };
   } },
-  { id: 'table.sortAsc', label: 'Sort Ascending', enabled: () => editable() && ledgerFocused(), run: () => {
+  { id: 'table.sortAsc', label: 'Sort Ascending', enabled: () => editable() && dataTableFocused(), run: () => {
     const t = focusTable();
-    if (t?.kind === 'ledger') app.sortLedger(t.id, t.columns[app.selection?.anchor.c ?? 0]?.id);
+    if (t?.kind === 'table') app.sortTable(t.id, t.columns[app.selection?.anchor.c ?? 0]?.id);
   } },
-  { id: 'table.sortDesc', label: 'Sort Descending', enabled: () => editable() && ledgerFocused(), run: () => {
+  { id: 'table.sortDesc', label: 'Sort Descending', enabled: () => editable() && dataTableFocused(), run: () => {
     const t = focusTable();
-    if (t?.kind === 'ledger') app.sortLedger(t.id, t.columns[app.selection?.anchor.c ?? 0]?.id, true);
+    if (t?.kind === 'table') app.sortTable(t.id, t.columns[app.selection?.anchor.c ?? 0]?.id, true);
   } },
-  { id: 'table.import', label: 'Import CSV or Excel…', enabled: () => editable() && ledgerFocused(), run: () => pickImportFile(focusTable()!.id) },
-  { id: 'table.delete', label: 'Delete Table', enabled: () => editable() && !!focusTable(), run: () => app.deleteTable(focusTable()!.id) },
+  { id: 'table.import', label: 'Import CSV or Excel…', enabled: () => editable() && dataTableFocused(), run: () => pickImportFile(focusTable()!.id) },
+  { id: 'table.delete', label: () => deleteTableLabel(), enabled: () => editable() && !!focusTable(), run: () => app.deleteTable(focusTable()!.id) },
 
   // Format
   ...STYLES.map<Command>((st) => ({
@@ -197,19 +214,22 @@ const list: Command[] = [
   ...(Object.keys(COLUMN_TYPE_LABELS) as ColumnType[]).map<Command>((type) => ({
     id: `format.type.${type}`,
     label: COLUMN_TYPE_LABELS[type],
-    enabled: () => editable() && ledgerFocused() && hasSel(),
+    enabled: () => editable() && dataTableFocused() && hasSel(),
     checked: () => {
       const t = focusTable();
-      return t?.kind === 'ledger' && t.columns[app.selection?.anchor.c ?? -1]?.type === type;
+      return t?.kind === 'table' && t.columns[app.selection?.anchor.c ?? -1]?.type === type;
     },
     run: () => {
       const t = focusTable();
-      const col = t?.kind === 'ledger' ? t.columns[app.selection?.anchor.c ?? -1] : undefined;
+      const col = t?.kind === 'table' ? t.columns[app.selection?.anchor.c ?? -1] : undefined;
       if (t && col) app.setColumnType(t.id, col.id, type);
     },
   })),
 
   // View
+  { id: 'view.zoomIn', label: 'Zoom In', keys: { key: '>', mod: true, shift: true }, enabled: () => !!app.file && app.zoom < 4 && !app.maximizedId, run: () => app.zoomStep(1) },
+  { id: 'view.zoomOut', label: 'Zoom Out', keys: { key: '<', mod: true, shift: true }, enabled: () => !!app.file && app.zoom > 0.25 && !app.maximizedId, run: () => app.zoomStep(-1) },
+  { id: 'view.actualSize', label: 'Actual Size', enabled: () => !!app.file && app.zoom !== 1 && !app.maximizedId, run: () => void app.setZoom(1) },
   { id: 'view.inspector', label: 'Inspector', keys: { key: 'i', mod: true, alt: true }, checked: () => app.showInspector, run: () => void (app.showInspector = !app.showInspector) },
 ];
 
@@ -241,44 +261,42 @@ export function commandForKey(e: KeyboardEvent): Command | undefined {
 
 export type MenuItem = string | '-' | { title: string; items: MenuItem[] };
 
-export const MENU_BAR: { title: string; items: MenuItem[] }[] = [
-  { title: 'File', items: ['file.list', '-', 'file.rename', 'file.snapshot', 'file.download'] },
-  { title: 'Edit', items: ['edit.undo', 'edit.redo', '-', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', '-', 'edit.selectAll'] },
-  { title: 'Insert', items: ['insert.table', 'insert.ledger', '-', 'insert.rowAbove', 'insert.rowBelow', 'insert.colBefore', 'insert.colAfter', '-', 'insert.footer'] },
-  {
-    title: 'Table',
-    items: ['table.rename', 'table.maximize', '-', 'table.deleteRows', 'table.deleteColumns', 'table.moveUp', 'table.moveDown', '-',
-      'table.renameColumn', 'table.sortAsc', 'table.sortDesc', 'table.import', '-', 'table.delete'],
-  },
-  {
-    title: 'Format',
-    items: [
-      { title: 'Cell Color', items: STYLES.map((s) => `format.color.${s.id}`) },
-      { title: 'Column Format', items: (Object.keys(COLUMN_TYPE_LABELS) as ColumnType[]).map((t) => `format.type.${t}`) },
-    ],
-  },
-  { title: 'View', items: ['view.inspector', 'table.maximize'] },
-];
+const COLORS: MenuItem = { title: 'Cell Color', items: STYLES.map((s) => `format.color.${s.id}`) };
+const FORMATS: MenuItem = { title: 'Column Format', items: (Object.keys(COLUMN_TYPE_LABELS) as ColumnType[]).map((t) => `format.type.${t}`) };
+const UNDO: MenuItem[] = ['edit.undo', 'edit.redo', '-'];
 
-/** Right-click / long-press menu for cells. */
-export function contextItems(target: 'cells' | 'table' | 'column'): MenuItem[] {
-  if (target === 'table') return ['edit.copy', 'edit.cut', '-', 'table.rename', 'table.maximize', '-', 'table.delete'];
-  if (target === 'column') {
-    return ['table.renameColumn', { title: 'Column Format', items: (Object.keys(COLUMN_TYPE_LABELS) as ColumnType[]).map((t) => `format.type.${t}`) },
-      '-', 'insert.colBefore', 'insert.colAfter', '-', 'table.sortAsc', 'table.sortDesc', '-', 'table.deleteColumns'];
+export type MenuTarget = 'cells' | 'table' | 'column' | 'rows' | 'columns';
+
+/** Right-click / long-press menu. Undo and Redo are here so touch-only use has them. */
+export function contextItems(target: MenuTarget): MenuItem[] {
+  const dataTable = dataTableFocused();
+  if (target === 'table') return [...UNDO, 'edit.copy', 'edit.cut', '-', 'table.rename', 'table.maximize', '-', 'table.delete'];
+  if (target === 'rows') {
+    return [...UNDO, 'insert.rowAbove', 'insert.rowBelow', '-', 'table.deleteRows', 'table.moveUp', 'table.moveDown', '-',
+      'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', '-', COLORS];
   }
-  const ledger = ledgerFocused();
+  if (target === 'column' || (target === 'columns' && dataTable)) {
+    return [...UNDO, 'table.renameColumn', FORMATS, '-', 'insert.colBefore', 'insert.colAfter', 'table.deleteColumns', '-',
+      'table.sortAsc', 'table.sortDesc', '-', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', '-', COLORS];
+  }
+  if (target === 'columns') return [...UNDO, 'edit.copy', 'edit.paste', 'edit.delete', '-', COLORS];
   return [
-    'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', '-',
+    ...UNDO, 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', '-',
     'insert.rowAbove', 'insert.rowBelow',
-    ...(ledger ? ['insert.colBefore', 'insert.colAfter'] : []),
-    '-', 'table.deleteRows', ...(ledger ? ['table.deleteColumns'] : []),
-    '-', { title: 'Cell Color', items: STYLES.map((s) => `format.color.${s.id}`) },
+    ...(dataTable ? ['insert.colBefore', 'insert.colAfter'] : []),
+    '-', 'table.deleteRows', ...(dataTable ? ['table.deleteColumns'] : []),
+    '-', COLORS,
   ];
 }
 
 /** The short edit menu shown above a selection after a tap (touch). */
-export function editMenuItems(target: 'cells' | 'table' | 'column'): string[] {
+export function editMenuItems(target: MenuTarget): string[] {
   if (target === 'table') return ['edit.copy', 'edit.cut', 'table.rename', 'table.maximize', 'table.delete'];
+  if (target === 'rows') return ['table.deleteRows', 'insert.rowAbove', 'insert.rowBelow', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete'];
+  if (target === 'columns' || target === 'column') {
+    return dataTableFocused()
+      ? ['table.deleteColumns', 'insert.colBefore', 'insert.colAfter', 'table.renameColumn', 'edit.copy', 'edit.paste', 'edit.delete']
+      : ['edit.copy', 'edit.paste', 'edit.delete'];
+  }
   return ['edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'insert.rowAbove', 'insert.rowBelow'];
 }

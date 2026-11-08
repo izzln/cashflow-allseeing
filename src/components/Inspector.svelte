@@ -2,11 +2,11 @@
   import { app, rowKind, type RowKind } from '../lib/store.svelte';
   import { isErr } from '../lib/evaluate';
   import { formatNumber, parseNumber } from '../lib/format';
-  import type { LedgerTable } from '../lib/model';
+  import type { DataTable } from '../lib/model';
   import { addMonths, currentMonth, monthLabel, monthRange, parseMonth } from '../lib/months';
   import { pickImportFile } from '../lib/commands';
   import SourcePicker from './SourcePicker.svelte';
-  import { COLUMN_TYPE_LABELS } from '../lib/ledger';
+  import { COLUMN_TYPE_LABELS } from '../lib/columns';
   import type { ColumnType } from '../lib/model';
 
   const t = $derived(app.table(app.focusTableId));
@@ -14,7 +14,7 @@
   const rowSel = $derived(app.selection && app.selection.anchor.c === 0 ? app.selectedRow() : null);
   const colSel = $derived.by(() => {
     const sel = app.selection;
-    if (!sel || t?.kind !== 'ledger') return null;
+    if (!sel || t?.kind !== 'table') return null;
     const c = sel.anchor.c;
     return t.columns[c] ? { index: c, col: t.columns[c] } : null;
   });
@@ -56,7 +56,7 @@
 
   const KINDS: { kind: RowKind; label: string }[] = [
     { kind: 'manual', label: 'Manual' },
-    { kind: 'source', label: 'From ledger' },
+    { kind: 'source', label: 'From table' },
     { kind: 'formula', label: 'Formula' },
   ];
 </script>
@@ -71,11 +71,11 @@
     </label>
     <p class="hint">
       {#if ro}Snapshots don't sync.{:else if app.syncLeader}This window runs the sync{app.lastSyncAt ? ` (last check ${fmtTime.format(app.lastSyncAt)})` : ''}.{:else}Another window with this file open runs the sync.{/if}
-      Feishu and Huoban sources will sync on this timer once the server is set up. Ledgers from CSV/Excel update when you import the file again.
+      Feishu and Huoban sources will sync on this timer once the server is set up. Tables filled from CSV/Excel update when you import the file again.
     </p>
     <p class="hint">Select a table to edit it.</p>
   {:else if t.kind === 'cashflow'}
-    <h3>Table</h3>
+    <h3>Cashflow</h3>
     <label>Name {#key t.id}<input value={t.name} disabled={ro} onchange={(e) => app.renameTable(t.id, value(e))} />{/key}</label>
     <label>Opening balance
       {#key `${t.id}:${t.openingBalance}`}<input value={formatNumber(t.openingBalance)} onchange={setOpening} inputmode="decimal" disabled={ro} />{/key}
@@ -92,7 +92,7 @@
       <div class="buttons">
         <button onclick={() => app.addRow(t.id)}>+ Row</button>
         <button onclick={() => app.addFooter(t.id)}>+ Footer formula</button>
-        <button class="danger" onclick={remove}>Delete table</button>
+        <button class="danger" onclick={remove}>Delete cashflow</button>
       </div>
     {/if}
 
@@ -110,9 +110,9 @@
         <p class="hint">Type amounts into the row. Inflows positive, outflows negative.</p>
       {:else if kind === 'source' && row.source}
         {@const src = row.source}
-        <SourcePicker mode="row" ledgerId={src.ledgerId} dateCol={src.dateCol} numberCol={src.amountCol} filters={src.filters} flip={src.flip} disabled={ro}
-          onchange={(p) => app.setRowSource(t.id, row.id, { ...(p.ledgerId !== undefined && { ledgerId: p.ledgerId }), ...(p.dateCol !== undefined && { dateCol: p.dateCol }), ...(p.numberCol !== undefined && { amountCol: p.numberCol }), ...(p.filters && { filters: p.filters }), ...(p.flip !== undefined && { flip: p.flip }) })} />
-        <p class="hint">Each month shows the total of the amount column for entries dated in that month (blue). Type in a cell to override it (orange corner); clear the cell to go back to the ledger.</p>
+        <SourcePicker mode="row" tableId={src.tableId} dateCol={src.dateCol} numberCol={src.amountCol} filters={src.filters} flip={src.flip} disabled={ro}
+          onchange={(p) => app.setRowSource(t.id, row.id, { ...(p.tableId !== undefined && { tableId: p.tableId }), ...(p.dateCol !== undefined && { dateCol: p.dateCol }), ...(p.numberCol !== undefined && { amountCol: p.numberCol }), ...(p.filters && { filters: p.filters }), ...(p.flip !== undefined && { flip: p.flip }) })} />
+        <p class="hint">Each month shows the total of the amount column for rows dated in that month (blue). Type in a cell to override it (orange corner); clear the cell to go back to the dataTable.</p>
         {#if Object.keys(row.values).length && !ro}
           <button onclick={() => app.clearOverrides(t.id, row.id)}>Remove {Object.keys(row.values).length} override(s)</button>
         {/if}
@@ -130,17 +130,24 @@
 
     {#if cellSel && rowKind(cellSel.row) !== 'formula'}
       {@const cs = cellSel.table.cellSources[cellSel.key]}
+      {@const fromRow = rowKind(cellSel.row) === 'source'}
+      {@const mode = cs ? 'total' : fromRow && cellSel.row.values[cellSel.month] === undefined ? 'row' : 'manual'}
       <h3>Cell: {cellSel.row.label || 'untitled'} · {label(cellSel.month)}</h3>
       <div class="segmented" role="radiogroup" aria-label="Cell value">
-        <button role="radio" aria-checked={!cs} class:on={!cs} disabled={ro} onclick={() => app.setCellSource(t.id, cellSel.key, null)}>{rowKind(cellSel.row) === 'source' ? 'From row' : 'Number'}</button>
-        <button role="radio" aria-checked={!!cs} class:on={!!cs} disabled={ro} onclick={() => !cs && app.setCellSource(t.id, cellSel.key, app.defaultCellSource())}>Ledger total</button>
+        {#if fromRow}
+          <button role="radio" aria-checked={mode === 'row'} class:on={mode === 'row'} disabled={ro} onclick={() => app.setCellMode(t.id, cellSel.key, 'row')}>From row</button>
+        {/if}
+        <button role="radio" aria-checked={mode === 'manual'} class:on={mode === 'manual'} disabled={ro} onclick={() => app.setCellMode(t.id, cellSel.key, 'manual')}>Manual</button>
+        <button role="radio" aria-checked={mode === 'total'} class:on={mode === 'total'} disabled={ro} onclick={() => app.setCellMode(t.id, cellSel.key, 'total')}>Table total</button>
       </div>
       {#if cs}
-        <SourcePicker mode="cell" ledgerId={cs.ledgerId} numberCol={cs.col} filters={cs.filters} flip={cs.flip} disabled={ro}
-          onchange={(p) => app.updateCellSource(t.id, cellSel.key, { ...(p.ledgerId !== undefined && { ledgerId: p.ledgerId }), ...(p.numberCol !== undefined && { col: p.numberCol }), ...(p.filters && { filters: p.filters }), ...(p.flip !== undefined && { flip: p.flip }) })} />
-        <p class="hint">This cell shows the total of one ledger column over all matching entries, whatever their dates (blue corner). Typing a number in the cell replaces it.</p>
+        <SourcePicker mode="cell" tableId={cs.tableId} numberCol={cs.col} filters={cs.filters} flip={cs.flip} disabled={ro}
+          onchange={(p) => app.updateCellSource(t.id, cellSel.key, { ...(p.tableId !== undefined && { tableId: p.tableId }), ...(p.numberCol !== undefined && { col: p.numberCol }), ...(p.filters && { filters: p.filters }), ...(p.flip !== undefined && { flip: p.flip }) })} />
+        <p class="hint">The total of one table column over all matching rows, whatever their dates (marked ⇄). Typing a number in the cell switches it to Manual.</p>
+      {:else if mode === 'row'}
+        <p class="hint">This month follows the row's table source. Choose Manual (or just type) to put your own number here.</p>
       {:else}
-        <p class="hint">To fill the whole row month by month from a ledger, select the row's first cell. To show one ledger column's total in just this cell, choose “Ledger total”.</p>
+        <p class="hint">{fromRow ? 'A number typed over the row’s table source (marked ✎). Choose From row to go back.' : 'Type a number in the cell.'} To fill a whole row month by month from a table, select the row's first cell.</p>
       {/if}
     {/if}
 
@@ -159,13 +166,13 @@
       {#if !ro}<button class="danger" onclick={() => app.deleteFooter(t.id, f.id)}>Delete footer row</button>{/if}
     {/if}
   {:else}
-    <h3>Ledger</h3>
+    <h3>Table</h3>
     <label>Name {#key t.id}<input value={t.name} disabled={ro} onchange={(e) => app.renameTable(t.id, value(e))} />{/key}</label>
-    <p class="hint">{t.entries.length} entries. Cash-flow rows can take their numbers from this ledger: select a row's first cell and choose “From ledger”.</p>
+    <p class="hint">{t.entries.length} rows. Cashflow rows can take their numbers from this table: select a cashflow row's first cell and choose “From table”.</p>
     {#if !ro}
       <div class="buttons">
         <button class="primary" onclick={() => pickImportFile(t.id)}>Import CSV / Excel…</button>
-        <button onclick={() => app.addRow(t.id)}>+ Entry</button>
+        <button onclick={() => app.addRow(t.id)}>+ Row</button>
       </div>
       {#if t.importedFrom}
         <p class="hint">Last imported from <b>{t.importedFrom}</b>. To refresh, import the new export; the column mapping is remembered.</p>
@@ -184,13 +191,13 @@
         <div class="buttons">
           <button onclick={() => app.insertColumn(t.id, colSel.index)} title="⌥←">+ Column before</button>
           <button onclick={() => app.insertColumn(t.id, colSel.index + 1)} title="⌥→">+ Column after</button>
-          <button onclick={() => app.sortLedger(t.id, col.id)}>Sort A→Z</button>
-          <button onclick={() => app.sortLedger(t.id, col.id, true)}>Sort Z→A</button>
+          <button onclick={() => app.sortTable(t.id, col.id)}>Sort A→Z</button>
+          <button onclick={() => app.sortTable(t.id, col.id, true)}>Sort Z→A</button>
           <button class="danger" onclick={() => app.deleteSelectedColumns()}>Delete column</button>
         </div>
       {/if}
     {/if}
-    {#if !ro}<button class="danger" onclick={remove}>Delete ledger</button>{/if}
+    {#if !ro}<button class="danger" onclick={remove}>Delete table</button>{/if}
   {/if}
 
   <h3>Tips</h3>

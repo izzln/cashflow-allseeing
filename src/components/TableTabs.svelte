@@ -8,23 +8,35 @@
    * Row and column tabs shown around the focused table, as in Numbers.
    * Click/tap a tab to select the whole row or column (Shift extends); drag tabs
    * to reorder; drop them on the canvas to make a new table (⌥ copies).
+   *
+   * They are drawn on an unscaled layer above the zoomed canvas, in screen pixels:
+   * they follow the table at any zoom but keep a full-size, tappable thickness.
    */
-  let { table, frame }: { table: Table; frame: HTMLElement | null } = $props();
+  let { table, layer }: { table: Table; layer: HTMLElement } = $props();
 
   let rows = $state<{ i: number; top: number; height: number }[]>([]);
   let cols = $state<{ i: number; left: number; width: number }[]>([]);
-  let box = $state({ width: 0, height: 0, top: 0 });
+  let box = $state({ left: 0, top: 0, width: 0, height: 0 });
+  const coarse = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches;
+  const ROW_TAB = coarse ? 30 : 20;
+  const COL_TAB = coarse ? 23 : 15;
 
-  const canDragCols = $derived(table.kind === 'ledger' && !app.readonly);
-  const bodyCount = $derived(table.kind === 'ledger' ? table.entries.length : table.rows.length);
+  const frameEl = () => document.querySelector<HTMLElement>(`[data-frame="${table.id}"]`);
+
+  const canDragCols = $derived(table.kind === 'table' && !app.readonly);
+  const bodyCount = $derived(table.kind === 'table' ? table.entries.length : table.rows.length);
 
   async function measure() {
     await tick();
+    const frame = frameEl();
     if (!frame) return;
-    const f = frame.getBoundingClientRect();
+    const f = layer.getBoundingClientRect();
+    const outer = frame.querySelector('.table')?.getBoundingClientRect();
     const tbl = frame.querySelector('table')?.getBoundingClientRect();
-    if (!tbl) return;
-    box = { width: tbl.width, height: tbl.height, top: tbl.top - f.top };
+    if (!tbl || !outer) return;
+    box = { left: tbl.left - f.left, top: tbl.top - f.top, width: tbl.width, height: tbl.height };
+    frameTop = outer.top - f.top;
+    frameLeft = outer.left - f.left;
     rows = [...frame.querySelectorAll<HTMLElement>('tbody td[data-c="0"]')].map((td) => {
       const r = td.getBoundingClientRect();
       return { i: Number(td.dataset.r), top: r.top - f.top, height: r.height };
@@ -35,15 +47,20 @@
       return { i: Number(td.dataset.c), left: r.left - f.left, width: r.width };
     });
   }
+  let frameTop = $state(0);
+  let frameLeft = $state(0);
 
   $effect(() => {
     app.version;
     app.months;
+    app.zoom;
     bodyCount;
     table.x;
     table.y;
     void measure();
   });
+  // Text that fits the (possibly tiny, zoomed-out) tab.
+  const fontFor = (len: number) => (len < 9 ? 0 : Math.min(10, len - 3));
 
   const sel = $derived(app.selection?.tableId === table.id ? app.selection : null);
   const selRows = $derived.by(() => {
@@ -91,7 +108,17 @@
     pointer: string;
   } | null>(null);
 
+  /** Right-click on a tab: select that row/column (unless already selected) and show its menu. */
+  function context(e: MouseEvent, axis: 'row' | 'col', i: number) {
+    e.preventDefault();
+    e.stopPropagation();
+    drag = null;
+    if (!wholeLines(axis).includes(i)) app.selectLines(table.id, axis, i);
+    app.menu = { kind: 'context', target: axis === 'row' ? 'rows' : 'columns', tableId: table.id, x: e.clientX, y: e.clientY };
+  }
+
   function down(e: PointerEvent, axis: 'row' | 'col', i: number) {
+    if (e.button === 2) return; // right-click: the contextmenu event handles it
     e.preventDefault();
     e.stopPropagation();
     app.commitEdit();
@@ -108,13 +135,14 @@
   }
 
   function move(e: PointerEvent) {
+    const frame = frameEl();
     if (!drag || !frame) return;
     if (!drag.moved && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 5) return;
     drag.moved = true;
     drag.x = e.clientX;
     drag.y = e.clientY;
     const t = frame.querySelector('table')?.getBoundingClientRect();
-    const f = frame.getBoundingClientRect();
+    const f = layer.getBoundingClientRect();
     if (!t) return;
     const margin = 28;
     drag.outside =
@@ -143,14 +171,15 @@
     if (!d.moved) {
       if (d.pointer === 'touch') {
         const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-        app.menu = { kind: 'edit', target: d.axis === 'col' && table.kind === 'ledger' ? 'column' : 'cells', tableId: table.id, x: r.left + r.width / 2, y: r.top };
+        app.menu = { kind: 'edit', target: d.axis === 'row' ? 'rows' : 'columns', tableId: table.id, x: r.left + r.width / 2, y: r.top };
       }
       return;
     }
     if (d.outside) {
+      // Drop point in unzoomed canvas pixels.
       const content = app.contentEl?.getBoundingClientRect();
-      const x = e.clientX - (content?.left ?? 0) - 20;
-      const y = e.clientY - (content?.top ?? 0) - 20;
+      const x = (e.clientX - (content?.left ?? 0)) / app.zoom - 20;
+      const y = (e.clientY - (content?.top ?? 0)) / app.zoom - 20;
       if (d.axis === 'row') app.extractRows(table.id, d.lines, x, y, e.altKey);
       else app.extractColumns(table.id, d.lines, x, y, e.altKey);
     } else if (d.to >= 0) {
@@ -175,10 +204,11 @@
   <button
     class="tab row"
     class:on={selRows.has(r.i)}
-    style="top:{r.top}px;height:{r.height}px"
-    title={app.readonly ? 'Select row' : 'Select row · drag to move · drag onto the canvas for a new table (⌥ copies)'}
+    style="top:{r.top}px;height:{r.height}px;left:{frameLeft - ROW_TAB - 4}px;width:{ROW_TAB}px;font-size:{fontFor(r.height)}px"
+    title={app.readonly ? 'Select row' : 'Select row · drag to move · drag onto the canvas for a new one (⌥ copies)'}
     aria-label={`Row ${label(r.i)}`}
     onpointerdown={(e) => down(e, 'row', r.i)}
+    oncontextmenu={(e) => context(e, 'row', r.i)}
     onpointermove={move}
     onpointerup={up}
     onpointercancel={() => (drag = null)}
@@ -188,10 +218,11 @@
   <button
     class="tab col"
     class:on={selCols.has(c.i) && wholeLines('col').includes(c.i)}
-    style="left:{c.left}px;width:{c.width}px"
-    title={canDragCols ? 'Select column · drag to move · drag onto the canvas for a new ledger (⌥ copies)' : 'Select column'}
+    style="left:{c.left}px;width:{c.width}px;top:{frameTop - COL_TAB - 3}px;height:{COL_TAB}px;font-size:{fontFor(c.width)}px"
+    title={canDragCols ? 'Select column · drag to move · drag onto the canvas for a new table (⌥ copies)' : 'Select column'}
     aria-label={`Column ${colLabel(c.i)}`}
     onpointerdown={(e) => down(e, 'col', c.i)}
+    oncontextmenu={(e) => context(e, 'col', c.i)}
     onpointermove={move}
     onpointerup={up}
     onpointercancel={() => (drag = null)}
@@ -200,14 +231,14 @@
 
 {#if drag?.moved && !drag.outside && drag.to >= 0}
   {#if drag.axis === 'row'}
-    <div class="marker h" style="top:{drag.marker - 1}px;width:{box.width}px"></div>
+    <div class="marker h" style="top:{drag.marker - 1}px;left:{box.left}px;width:{box.width}px"></div>
   {:else}
     <div class="marker v" style="left:{drag.marker - 1}px;top:{box.top}px;height:{box.height}px"></div>
   {/if}
 {/if}
 {#if drag?.moved && drag.outside}
   <div class="ghost" style="left:{drag.x + 12}px;top:{drag.y + 12}px">
-    New {table.kind === 'ledger' ? 'ledger' : 'table'} with {drag.lines.length} {drag.axis === 'row' ? 'row' : 'column'}{drag.lines.length === 1 ? '' : 's'}
+    New {table.kind === 'table' ? 'table' : 'cashflow'} with {drag.lines.length} {drag.axis === 'row' ? 'row' : 'column'}{drag.lines.length === 1 ? '' : 's'}
   </div>
 {/if}
 
@@ -218,30 +249,12 @@
     border: 1px solid var(--line);
     background: var(--head);
     color: var(--muted);
-    font-size: 10px;
     padding: 0;
+    overflow: hidden;
     min-height: 0;
     border-radius: 4px;
     touch-action: none;
     cursor: grab;
-  }
-  .tab.row {
-    left: -24px;
-    width: 20px;
-  }
-  .tab.col {
-    top: -18px;
-    height: 15px;
-  }
-  @media (pointer: coarse) {
-    .tab.row {
-      left: -34px;
-      width: 30px;
-    }
-    .tab.col {
-      top: -26px;
-      height: 23px;
-    }
   }
   .tab.on {
     background: var(--accent);
@@ -255,7 +268,6 @@
     pointer-events: none;
   }
   .marker.h {
-    left: 0;
     height: 3px;
   }
   .marker.v {

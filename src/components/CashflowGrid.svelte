@@ -3,11 +3,11 @@
   import { isErr, type CellValue } from '../lib/evaluate';
   import { formatNumber } from '../lib/format';
   import { cellsInRanges, FIXED_FOOTERS, styleKey } from '../lib/grid';
-  import type { CashTable } from '../lib/model';
+  import type { CashflowTable } from '../lib/model';
   import { groupByYear, monthLabel } from '../lib/months';
   import { STYLE_BY_ID } from '../lib/styles';
 
-  let { table }: { table: CashTable } = $props();
+  let { table }: { table: CashflowTable } = $props();
 
   const months = $derived(app.months);
   const ev = $derived(app.ev);
@@ -57,7 +57,7 @@
           class:sel={selected.has(`${r},0`)}
           class:anchor={anchor(r, 0)}
           style={style(row.id, 'label')}
-          title={kind === 'source' ? 'From a ledger' : kind === 'formula' ? `Formula: ${row.formula}` : undefined}
+          title={kind === 'source' ? 'From a table' : kind === 'formula' ? `Formula: ${row.formula}` : undefined}
         >{#if kind === 'source'}<span class="icon src">⇄</span>{:else if kind === 'formula'}<span class="icon fx">ƒ</span>{/if}{row.label}</td>
         {#each months as m, i (m)}
           {@const v = ev.row(table, row, m)}
@@ -76,7 +76,7 @@
             class:sel={selected.has(`${r},${i + 1}`)}
             class:anchor={anchor(r, i + 1)}
             style={style(row.id, m)}
-            title={tip(v) ?? (linked ? 'Total of a ledger column' : undefined)}
+            title={tip(v) ?? (linked ? 'Total of a table column' : !linked && kind === 'source' && row.values[m] !== undefined ? 'Typed over the table’s number' : undefined)}
           >{show(v)}</td>
         {/each}
       </tr>
@@ -150,25 +150,24 @@
   td.fx.neg {
     color: #b8336a;
   }
-  /* A manual number typed over a source: marked with a corner tick. */
-  td.ovr::after {
-    content: '';
+  /* Data links use ⇄ (like source rows); a number typed over a source row shows ✎.
+     Corner triangles are kept free for comments. */
+  td.linked::before,
+  td.ovr::before {
     position: absolute;
-    top: 0;
-    right: 0;
-    border-style: solid;
-    border-width: 0 7px 7px 0;
-    border-color: transparent #f59e0b transparent transparent;
+    left: 5px;
+    font-size: 11px;
+    line-height: 1;
+    top: 50%;
+    transform: translateY(-50%);
   }
-  /* A cell that shows one ledger column's total: marked with a blue corner tick. */
-  td.linked::after {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    border-style: solid;
-    border-width: 7px 7px 0 0;
-    border-color: #1d63c7 transparent transparent transparent;
+  td.linked::before {
+    content: '⇄';
+    color: #1d63c7;
+  }
+  td.ovr::before {
+    content: '✎';
+    color: #b54708;
   }
   td.err {
     color: var(--neg);

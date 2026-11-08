@@ -5,140 +5,45 @@ sheets as tabs along the top, several tables per sheet placed on a canvas, month
 
 ## Status
 
-**Phase 1 — editor core (done)**
-- Sheets as top tabs (add, rename by clicking the active tab, reorder, delete)
-- Multiple tables per sheet, dragged by the title bar and snapped to a 20 px grid
-- Two header rows (year, month). The window runs from the current month to December of next year;
-  past months drop off the view, but their data is kept and still counts toward the balance
-- Footer rows: **Net cash flow** (sum of all rows) and **Balance** (opening balance + cash flow carried forward)
-- Outflows are negative numbers
-- Multi-cell selection (drag, Shift, ⌘/Ctrl) with Sum / Average / Count at bottom right
-- Cell color presets
-- Copy/paste with Excel and Numbers (tab-separated text; pasting past the last row adds rows)
-- Undo/redo and autosave
-- Works with mouse and keyboard (Mac) and touch (iPad)
+Two kinds of table sit on each sheet's canvas:
+- **Cashflow** — months as columns (current month → December next year). Rows are typed numbers,
+  formulas, or numbers taken from a table. Footer rows: Net cash flow, Balance (carried forward from
+  an opening balance, counting months that have scrolled out of view), plus custom formula rows.
+- **Table** — rows with typed columns: Date, Number, Text, Checkbox, Files. Typed in, pasted, or
+  imported from CSV / Excel (.xlsx; UTF-8 or GBK CSV; Chinese and English headers recognised).
 
-**Files**
-- The app opens on a file list: create, open, rename, duplicate, download, import, delete
-- A file holds everything for one piece of work: sheets, tables, snapshots (and, from phase 2,
-  its data-source and sync settings)
-- Each window shows one file in its address (`#/f/<id>`), so windows can hold different files —
-  or the **same file side by side**: every window can edit, and edits appear in the others within
-  a moment. Edits to different cells merge; if two windows change the same cell at once, the
-  later save wins. Undo in a window reverses only that window's own changes
-- **Snapshots** are frozen copies kept inside the file:
-  - taken automatically at each month-end (the content as it stood when the month ended)
-  - taken manually any time (Snapshots → Take snapshot now)
-  - opened read-only in their own window (`#/f/<id>/s/<snapshotId>`), showing the months as they
-    were at the time, so you can compare them with the live file; "Save as new file" makes an
-    editable copy
-- **Download** saves the whole file, snapshots included (`<name> YYYY-MM-DD.json`).
-  **Import file** always creates a new file and never overwrites one
+**Taking numbers from a table**
+- A cashflow row's first cell → *From table*: each month = the amount column's total for rows dated
+  in that month, with filters (text is any of / contains, checkbox ticked / not) and sign flip. ⇄
+- A single month cell → *From row* (follows the row), *Manual* (typed; ✎ when it overrides a linked
+  row) or *Table total* (one column's total over all matching rows, any date; ⇄)
+- Formulas: `[Row]`, `[Table].[Row]`, `[Net cash flow]`, `[Balance]`, `PREV([x], n)`, `SUM MIN MAX
+  ABS ROUND IF`; Chinese full-width input works. Errors show as `#ERR` with the reason
 
-**Phase 2 — ledgers, imports, sources, formulas (done)**
-- **Ledger tables** (+ Ledger): a list of dated amounts with Date, Amount, Category, Note. Type
-  dates in any common form (2026-11-07, 2026/11/7, 2026年11月7日, 11/7). Paste a block onto the
-  Total row to append entries
-- **Import CSV / Excel** into a ledger: `.csv` (UTF-8 or GBK), `.tsv`, `.xlsx`. Columns are guessed
-  from Chinese or English headers (交易日期, 金额, 借方/贷方, 收入/支出, 类别, 摘要…); separate money-in
-  and money-out columns are supported; preview before importing; replace or append. The mapping
-  is saved in the ledger, so re-importing a new export is one step. Old `.xls` and `.numbers`
-  files need saving as `.xlsx` or `.csv` first
-- **Rows from a ledger** ("From ledger" in the panel): each month shows the sum of the ledger's
-  entries in that month, filtered by categories and/or note text, optionally sign-flipped. Typing
-  in a cell overrides that month (orange corner); clearing it goes back to the ledger
-- **Formula rows** count toward net cash flow, e.g. `[Sales] * -6%`.
-  **Footer formula rows** sit below Balance and don't count, e.g. `[Balance] / ABS([Payroll])`.
-  References: `[Row]`, `[Table].[Row]` (any sheet), `[Net cash flow]` / `[Balance]` (footers only;
-  also 净现金流 / 余额). Functions: `SUM MIN MAX ABS ROUND IF PREV` (`PREV([Sales], 2)` = two months
-  back, for payment lags). Chinese full-width input (【】（）×－％) works. Errors show as `#ERR`
-  with the reason in the panel; circular references are caught
-- **Sync setting** per file (default every 15 minutes). One window per file runs the timer. It has
-  nothing to pull until the Feishu/Huoban connectors exist (phase 4)
+**Interface (Apple HIG by default; deviations listed in CLAUDE.md)**
+- Top row: ‹ Files · file name (menu: Rename, Download a Copy, Take Snapshot, snapshots, All Files) and
+  save status · sheet tabs. Second row: icon toolbar — Cashflow, Table · rows and columns · Color
+  (fill + text sets) · Fill Window, Zoom · Inspector
+- Mouse: click selects; double-click edits a cell, renames a table (title) or a column (header);
+  right-click menus on cells, titles and row/column tabs. Touch: tap selects and shows the edit menu
+  (Cut, Copy, Paste, Delete…, ••• for more); tap again to edit; long-press for the full menu
+- Row/column tabs on the selected table: select whole rows/columns (Shift extends; arrow keys move the
+  selection a row/column at a time), drag to reorder, drop on the canvas for a new table (⌥ copies)
+- Numbers shortcuts: ⌥↑/⌥↓ row above/below, ⌥←/⌥→ column before/after, ⌥⌘⌫ delete rows,
+  ⌘> / ⌘< zoom, ⌘Z / ⇧⌘Z, ⌥⌘I inspector, ⇧⌘S download, ⇧⌘O all files
+- Zoom 25 %–400 % (toolbar, ⌘> / ⌘<, pinch on trackpad or iPad). Row/column tabs stay full size
+- Fill Window shows one table across the workspace with header rows and first column pinned
 
-**Phase 3 — Cloudflare server (built; see Deploy)**
-- One Cloudflare Worker serves the app and a small API under `/api/*`; files and snapshots live in
-  Cloudflare D1. The app's static files are served without running the Worker
-- Sign-in with a single password (the `EDITOR_PASSWORD` secret). The session is a signed cookie
-  (HttpOnly, Secure, SameSite=Strict, 90 days). 10 wrong passwords from one address lock sign-in
-  for 15 minutes. Changing the password signs every device out
-- The same file list on every device. Windows on one device update each other at once; other
-  devices notice changes within about 15 seconds (or on switching back to the window)
-- Offline or server unreachable: edits stay in the window and save automatically when the
-  connection returns ("Offline · will retry"); the browser warns before closing with unsaved edits.
-  If the session ends, a sign-in box appears and the edits are saved after signing in
-- The month-end snapshot rule runs on the server, using your local month
-- Files made in the browser before the server existed can be uploaded from the file list (with
-  their snapshots); the browser copy is kept
-- Without the server (`npm run dev`), the app keeps files in the browser as before
-
-**Mac-style interface (HIG)**
-- Menu bar (File, Edit, Insert, Table, Format, View) listing every command with its shortcut;
-  toolbar for frequent ones; right-click context menus; inspector panel
-- Mouse: a click selects; double-click edits a cell, renames a table (title) or a ledger column
-  (header). Touch: a tap selects and shows the edit menu (Cut, Copy, Paste, Delete, Row Above/Below,
-  ••• for more); tap again to edit; long-press for the full menu. Menus have 44 pt targets on touch
-- Numbers shortcuts: ⌥↑ / ⌥↓ insert a row above / below, ⌥← / ⌥→ insert a column before / after
-  (ledgers), ⌥⌘⌫ delete rows, ⌘Z / ⇧⌘Z, ⌘A, ⌥⌘I inspector, ⇧⌘O all files, ⇧⌘S download
-- Select a table by its title, then Delete / ⌘C / ⌘X act on the whole table
-- Row and column tabs (shown on the selected table): click/tap selects the whole row or column
-  (Shift extends); drag to reorder; drop on the canvas to make a new table or ledger (⌥ copies)
-- ⤢ in a title bar fills the workspace with that table; header rows and the first column stay put
-  while scrolling; esc restores
-- The first column is styled as a header column; month headers are centred
-
-**Ledgers**
-- Columns can be renamed (double-click the header), inserted, deleted, moved, sorted, and given a
-  cell format: Date, Number, Text, Checkbox (click or Space to tick) or Files
-- Files cells hold any number of attachments (up to 25 MB each): Add files… (several at once) or
-  drop files onto the cell; open or download them from the popover. On the server they are stored
-  in D1 next to the file; removing one from a cell keeps the stored copy so Undo and snapshots still
-  open it. Downloaded copies of a file list attachment names but don't include the files
-- Import maps file columns onto any ledger column (matched by name, plus Chinese/English synonyms)
-
-**Taking numbers from a ledger**
-- Select a row's first cell → Row: From ledger. Each month = the amount column's total for entries
-  dated in that month (date column and amount column are chosen), with filters (text is any of /
-  contains, checkbox ticked / not ticked) and sign flip
-- Select one month cell → Cell: Ledger total. That cell = one number column's total over all
-  matching entries, whatever their dates (blue corner). Typing a number replaces it
+**Files, sync and server**
+- Each file holds its sheets, tables and snapshots; any number of windows can edit the same file and
+  edits merge. Snapshots: automatic at month-end, or taken by hand; open read-only beside the live file
+- Cloudflare Worker + D1 (APAC): sign-in with one password, same files on every device, offline retry
+- Files cells: attachments up to 25 MB each, stored in D1
 
 **Next**
-- Phase 4: Feishu and Huoban connectors, pulled into ledgers on the sync timer
-- Last: view-only share links
-
-## Development
-
-```sh
-npm install
-npm run dev      # local dev server
-npm test         # unit tests
-npm run check    # type check
-npm run build    # production build in dist/
-```
-
-```sh
-npm run dev:server   # build, then run the Worker + local D1 at http://localhost:8787
-                     # (password from .dev.vars: EDITOR_PASSWORD=..., SESSION_SECRET=...)
-```
-
-Stack: Vite + TypeScript + Svelte 5, Cloudflare Workers + D1. No UI or spreadsheet libraries.
-
-## Deploy
-
-Live at https://cashflow-allseeing.cashflow-allseeing.workers.dev (D1 database in APAC).
-
-- `npm run deploy` builds the app, bundles it into the Worker (`scripts/embed-assets.mjs`; no
-  separate static-asset upload), applies new `migrations/` to D1 and deploys
-- Secrets (dashboard → Workers & Pages → cashflow-allseeing → Settings → Variables and Secrets, or
-  `wrangler secret put`): `EDITOR_PASSWORD` (your password, 8+ characters; until it is set nobody
-  can sign in) and `SESSION_SECRET` (long random string; already set). Changing either signs all
-  devices out
-- First-time setup for another account: `wrangler d1 create cashflow-allseeing --location apac`,
-  put the `database_id` in `wrangler.jsonc`, then deploy
-
-Limits: a file's content (with all its ledgers) must stay under 1.9 MB, D1's 2 MB value limit;
-that is many years of ledger entries at ~100 a month. Each snapshot is stored separately.
+- Feishu and Huoban connectors, pulled into tables on the sync timer (default every 15 min)
+- Comments on cells (corner triangle)
+- View-only share links
 
 ## Sync design
 
