@@ -24,35 +24,13 @@
     renaming = null;
   }
 
-  const STATE_LABEL = {
-    saved: 'Saved',
-    pending: 'Saving…',
-    offline: 'Offline · will retry',
-    signin: 'Sign in to save',
-    error: 'Not saved',
-  } as const;
-
-  function renameFile() {
-    const n = prompt('File name', app.file?.name ?? '');
-    if (n) app.renameFile(n);
-  }
-
   function remove(id: string, name: string) {
     if (confirm(`Delete sheet "${name}" and all its tables?`)) app.deleteSheet(id);
   }
 </script>
 
 <nav class="tabs">
-  <a class="back" href="#/" title="All files">‹ Files</a>
-  {#if app.snapshot}
-    <span class="file">{app.file?.name}</span>
-    <span class="snap">Snapshot: {app.snapshot.label} · read-only</span>
-    <a class="back" href="#/f/{app.file?.id}" target="_blank" rel="noopener">Open live file</a>
-  {:else}
-    <button class="file" onclick={renameFile} title="Rename file">{app.file?.name}</button>
-    <span class="state {app.saveState}">{STATE_LABEL[app.saveState]}</span>
-  {/if}
-  <span class="sep"></span>
+
   {#each app.wb.sheets as s (s.id)}
     <div class="tab" class:active={s.id === app.activeSheetId}>
       {#if renaming === s.id}
@@ -92,46 +70,6 @@
     border-bottom: 1px solid var(--line);
     overflow-x: auto;
     flex-shrink: 0;
-  }
-  .back {
-    color: var(--accent);
-    text-decoration: none;
-    white-space: nowrap;
-    padding: 4px 6px;
-  }
-  .file {
-    border: none;
-    background: transparent;
-    font-weight: 600;
-    white-space: nowrap;
-    max-width: 240px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .state {
-    color: var(--muted);
-    font-size: 12px;
-    white-space: nowrap;
-    min-width: 56px;
-  }
-  .snap {
-    background: #fff4e5;
-    color: #7a4a00;
-    border-radius: 6px;
-    padding: 3px 8px;
-    white-space: nowrap;
-    font-size: 12px;
-  }
-  .state.offline,
-  .state.signin,
-  .state.error {
-    color: var(--neg);
-  }
-  .sep {
-    width: 1px;
-    align-self: stretch;
-    background: var(--line);
-    margin: 2px 8px;
   }
   .tab {
     display: flex;

@@ -12,12 +12,14 @@ function setup() {
   rent.values = { '2026-10': -40, '2026-11': -300, '2026-12': -800 };
   t.rows = [sales, rent];
   const ledger = newLedger('Bank');
+  ledger.columns.push({ id: 'paid', name: 'Paid', type: 'checkbox' });
+  const e = (id: string, cells: Record<string, string | number | boolean>) => ({ id, cells });
   ledger.entries = [
-    { id: 'e1', date: '2026-11-03', amount: -120.1, category: 'Suppliers', note: 'Paper' },
-    { id: 'e2', date: '2026-11-20', amount: -80.2, category: 'suppliers ', note: 'Ink' },
-    { id: 'e3', date: '2026-11-21', amount: 999, category: 'Sales', note: '' },
-    { id: 'e4', date: '2026-12-05', amount: -50, category: 'Suppliers', note: 'Paper' },
-    { id: 'e5', date: '', amount: -1, category: 'Suppliers', note: '' },
+    e('e1', { date: '2026-11-03', amount: -120.1, category: 'Suppliers', note: 'Paper', paid: true }),
+    e('e2', { date: '2026-11-20', amount: -80.2, category: 'suppliers ', note: 'Ink' }),
+    e('e3', { date: '2026-11-21', amount: 999, category: 'Sales' }),
+    e('e4', { date: '2026-12-05', amount: -50, category: 'Suppliers', note: 'Paper', paid: true }),
+    e('e5', { amount: -1, category: 'Suppliers' }),
   ];
   const wb: Workbook = { schema: 1, sheets: [{ id: 's', name: 'S', tables: [t, ledger] }], settings: { syncMinutes: 15 } };
   return { wb, t, sales, rent, ledger };
@@ -36,7 +38,13 @@ describe('Evaluator', () => {
   it('fills a source row from the ledger with category filter, and lets manual values override', () => {
     const { wb, t, ledger } = setup();
     const sup = newRow('Suppliers');
-    sup.source = { ledgerId: ledger.id, categories: ['Suppliers'], noteContains: '', flip: false };
+    sup.source = {
+      ledgerId: ledger.id,
+      dateCol: 'date',
+      amountCol: 'amount',
+      filters: [{ col: 'category', op: 'in', values: ['Suppliers'], text: '' }],
+      flip: false,
+    };
     sup.values = { '2026-12': -75 };
     t.rows.push(sup);
     const ev = new Evaluator(wb);
@@ -46,10 +54,34 @@ describe('Evaluator', () => {
     expect(ev.cashFlow(t, '2026-11')).toBeCloseTo(499.7);
   });
 
-  it('filters by note text and flips signs', () => {
+  it('filters by note text and checkbox, and flips signs', () => {
     const { wb, ledger } = setup();
     const ev = new Evaluator(wb);
-    expect(ev.sourceValue({ ledgerId: ledger.id, categories: [], noteContains: 'paper', flip: true }, '2026-11')).toBe(120.1);
+    const src = (filters: any[]) => ({ ledgerId: ledger.id, dateCol: 'date', amountCol: 'amount', filters, flip: true });
+    expect(ev.sourceValue(src([{ col: 'note', op: 'contains', values: [], text: 'paper' }]), '2026-11')).toBe(120.1);
+    expect(ev.sourceValue(src([{ col: 'paid', op: 'unchecked', values: [], text: '' }]), '2026-11')).toBe(-918.8);
+  });
+
+  it('shows one ledger column total in a single cell, over all dates', () => {
+    const { wb, t, sales, ledger } = setup();
+    t.cellSources[`${sales.id}|2026-11`] = {
+      ledgerId: ledger.id,
+      col: 'amount',
+      filters: [{ col: 'paid', op: 'checked', values: [], text: '' }],
+      flip: false,
+    };
+    const ev = new Evaluator(wb);
+    expect(ev.row(t, sales, '2026-11')).toBe(-170.1); // −120.1 (Nov) + −50 (Dec), both ticked
+    expect(ev.row(t, sales, '2026-12')).toBe(500); // other months keep their numbers
+    expect(ev.cashFlow(t, '2026-11')).toBe(-470.1);
+  });
+
+  it('explains a source with a missing column', () => {
+    const { wb, t, ledger } = setup();
+    const r = newRow('Broken');
+    r.source = { ledgerId: ledger.id, dateCol: 'nope', amountCol: 'amount', filters: [], flip: false };
+    t.rows.push(r);
+    expect(new Evaluator(wb).row(t, r, '2026-11')).toEqual({ err: 'Choose a date column for this row' });
   });
 
   it('computes formula rows and footer rows', () => {

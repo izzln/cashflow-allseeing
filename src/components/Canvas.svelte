@@ -8,6 +8,7 @@
   let contentEl: HTMLDivElement;
   let editorEl: HTMLInputElement;
 
+  const maxTable = $derived(app.maximizedId ? app.sheet.tables.find((t) => t.id === app.maximizedId) : undefined);
   const size = $derived.by(() => {
     let w = 0;
     let h = 0;
@@ -48,19 +49,26 @@
   }
 </script>
 
-<div class="canvas">
+<div class="canvas" onscroll={() => app.menu?.kind === 'edit' && (app.menu = null)}>
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
     class="content"
     bind:this={contentEl}
-    style="width:{size.w}px;height:{size.h}px"
+    class:filled={!!maxTable}
+    style={maxTable ? '' : `width:${size.w}px;height:${size.h}px`}
     onpointerdown={onBackground}
   >
-    {#each app.sheet.tables as t (t.id)}
-      <TableFrame table={t}>
-        {#if t.kind === 'ledger'}<LedgerGrid table={t} />{:else}<CashGrid table={t} />{/if}
+    {#if maxTable}
+      <TableFrame table={maxTable} maximized>
+        {#if maxTable.kind === 'ledger'}<LedgerGrid table={maxTable} />{:else}<CashGrid table={maxTable} />{/if}
       </TableFrame>
-    {/each}
+    {:else}
+      {#each app.sheet.tables as t (t.id)}
+        <TableFrame table={t}>
+          {#if t.kind === 'ledger'}<LedgerGrid table={t} />{:else}<CashGrid table={t} />{/if}
+        </TableFrame>
+      {/each}
+    {/if}
     <input
       class="editor"
       class:open={!!app.editing}
@@ -89,6 +97,11 @@
     background-image: radial-gradient(circle, #d4d8de 1px, transparent 1.2px);
     background-size: 20px 20px;
     background-position: -10px -10px;
+  }
+  .content.filled {
+    position: absolute;
+    inset: 0;
+    background-image: none;
   }
   .editor {
     position: absolute;

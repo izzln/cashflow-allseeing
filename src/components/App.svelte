@@ -8,6 +8,11 @@
   import StatusBar from './StatusBar.svelte';
   import Home from './Home.svelte';
   import Login from './Login.svelte';
+  import FilesPopover from './FilesPopover.svelte';
+  import MenuBar from './MenuBar.svelte';
+  import PopupMenus from './PopupMenus.svelte';
+  import ImportDialog from './ImportDialog.svelte';
+  import { commandForKey, commands, isEnabled } from '../lib/commands';
   import { fileStore } from '../lib/files';
   import { session } from '../lib/session.svelte';
 
@@ -45,7 +50,6 @@
       : `${app.file.name} — Cashflow`;
   });
 
-  let showInspector = $state(typeof window !== 'undefined' && window.innerWidth >= 1000);
 
   function inField(e: Event): boolean {
     const el = e.target as HTMLElement | null;
@@ -54,25 +58,40 @@
 
   function onKeydown(e: KeyboardEvent) {
     if (view !== 'file' || inField(e)) return;
-    const mod = e.metaKey || e.ctrlKey;
-    if (mod && e.key.toLowerCase() === 'z') {
-      e.preventDefault();
-      if (e.shiftKey) app.redo();
-      else app.undo();
+    // Menus handle their own keys.
+    if ((e.target as HTMLElement | null)?.closest?.('[role="menu"]')) return;
+    if (e.key === 'Escape') {
+      if (app.menu) app.menu = null;
+      else if (app.filesCell) app.filesCell = null;
+      else if (app.selection) app.selection = null;
+      else if (app.maximizedId) app.maximizedId = null;
+      else app.focusTableId = null;
       return;
     }
-    if (mod && e.key.toLowerCase() === 'y') {
+    app.menu = null;
+    const cmd = commandForKey(e) ?? (e.key === 'Delete' && !e.metaKey && !e.ctrlKey && !e.altKey ? commands['edit.delete'] : undefined);
+    if (cmd) {
+      e.preventDefault();
+      if (isEnabled(cmd)) void cmd.run();
+      return;
+    }
+    // Windows-style redo.
+    if (e.ctrlKey && !e.metaKey && e.key.toLowerCase() === 'y') {
       e.preventDefault();
       app.redo();
       return;
     }
     if (!app.selection) return;
-    if (mod && e.key.toLowerCase() === 'a') {
-      e.preventDefault();
-      app.selectAll();
-      return;
-    }
+    const mod = e.metaKey || e.ctrlKey;
     if (mod || e.altKey) return;
+    if (e.key === ' ' && app.table(app.selection.tableId)?.kind === 'ledger') {
+      const t = app.table(app.selection.tableId);
+      if (t?.kind === 'ledger' && t.columns[app.selection.anchor.c]?.type === 'checkbox') {
+        e.preventDefault();
+        app.toggleCheckboxes();
+        return;
+      }
+    }
     const moves: Record<string, [number, number]> = {
       ArrowUp: [-1, 0],
       ArrowDown: [1, 0],
@@ -89,11 +108,6 @@
     } else if (e.key === 'Enter' || e.key === 'F2') {
       e.preventDefault();
       app.startEdit();
-    } else if (e.key === 'Backspace' || e.key === 'Delete') {
-      e.preventDefault();
-      app.clearSelected();
-    } else if (e.key === 'Escape') {
-      app.selection = null;
     } else if (e.key.length === 1 && !e.isComposing) {
       // Typing on a selected cell replaces its content, like Excel.
       e.preventDefault();
@@ -183,16 +197,23 @@
     <button onclick={route}>Try again</button>
   </div>
 {:else if view === 'file' && app.file}
+  {@const importLedger = app.importing ? app.table(app.importing.ledgerId) : undefined}
   <div class="shell">
+    <MenuBar />
+    <Toolbar />
     <SheetTabs />
-    <Toolbar bind:showInspector />
     <div class="main">
       <Canvas />
-      {#if showInspector}
+      {#if app.showInspector}
         <Inspector />
       {/if}
     </div>
     <StatusBar />
+    <FilesPopover />
+    <PopupMenus />
+    {#if app.importing && importLedger?.kind === 'ledger'}
+      <ImportDialog ledger={importLedger} fileName={app.importing.fileName} sheets={app.importing.sheets} onclose={() => (app.importing = null)} />
+    {/if}
   </div>
   {#if session.mode === 'remote' && !session.signedIn}
     <Login overlay onsignedin={afterSignIn} />

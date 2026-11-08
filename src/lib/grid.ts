@@ -1,7 +1,7 @@
-import { parseDate } from './dates';
 import { isErr, type CellValue, type Evaluator } from './evaluate';
 import { parseNumber } from './format';
-import { newEntry, newRow, type CashTable, type LedgerTable, type Table } from './model';
+import { cellRaw, cellValue, parseCell } from './ledger';
+import { newEntry, newRow, type CashTable, type ColumnType, type LedgerColumn, type LedgerTable, type Table } from './model';
 import type { MonthKey } from './months';
 
 /** Cell position inside a table. r: body rows, then footer rows. c: column. */
@@ -20,12 +20,11 @@ export const FIXED_FOOTERS = [
   { id: '__balance', label: 'Balance' },
 ] as const;
 
-export const LEDGER_COLS = [
-  { key: 'date', label: 'Date', width: 112, align: 'left' },
-  { key: 'amount', label: 'Amount', width: 120, align: 'right' },
-  { key: 'category', label: 'Category', width: 150, align: 'left' },
-  { key: 'note', label: 'Note', width: 240, align: 'left' },
-] as const;
+const TYPE_WIDTH: Record<ColumnType, number> = { date: 112, number: 120, text: 160, checkbox: 90, files: 190 };
+
+export function columnWidth(c: LedgerColumn): number {
+  return c.id === 'note' && c.type === 'text' ? 240 : TYPE_WIDTH[c.type];
+}
 
 export function styleKey(rowId: string, colKey: string): string {
   return `${rowId}|${colKey}`;
@@ -85,6 +84,10 @@ export interface GridModel {
   set(p: Pos, text: string): boolean;
   insertBodyRow(at: number): void;
   alignRight(c: number): boolean;
+  /** What kind of cell this is, so editing can toggle checkboxes or open the files popover. */
+  cellType(p: Pos): ColumnType | 'label' | 'calc';
+  /** True when clearing the cell would change nothing. */
+  isEmpty(p: Pos): boolean;
 }
 
 const num = (v: CellValue): number | null => (isErr(v) ? null : v);
@@ -145,6 +148,8 @@ export function cashModel(t: CashTable, months: MonthKey[], ev: Evaluator): Grid
       const n = parseNumber(text);
       if (n === undefined) return false;
       const m = months[p.c - 1];
+      // Typing (or clearing) replaces a ledger total shown in this cell.
+      delete t.cellSources[`${row.id}|${m}`];
       // On a source row, clearing a cell goes back to the source's number.
       if (n === null) delete row.values[m];
       else row.values[m] = n;
@@ -152,57 +157,65 @@ export function cashModel(t: CashTable, months: MonthKey[], ev: Evaluator): Grid
     },
     insertBodyRow: (at) => void t.rows.splice(at, 0, newRow()),
     alignRight: (c) => c > 0,
+    cellType: (p) => (p.c === 0 ? 'label' : p.r < nb && t.rows[p.r].formula === undefined ? 'number' : 'calc'),
+    isEmpty(p) {
+      if (p.r >= nb) return p.c !== 0 || !(t.footers[p.r - nb - nf]?.label ?? '');
+      const row = t.rows[p.r];
+      if (p.c === 0) return row.label === '';
+      const m = months[p.c - 1];
+      return row.values[m] === undefined && !t.cellSources[`${row.id}|${m}`];
+    },
   };
 }
 
 export function ledgerModel(t: LedgerTable, now = new Date()): GridModel {
   const nb = t.entries.length;
+  const cols = t.columns;
+  const total = (c: LedgerColumn): string | number => {
+    if (c.type === 'number') {
+      return t.entries.reduce((s, e) => {
+        const v = e.cells[c.id];
+        return typeof v === 'number' ? Math.round((s + v) * 100) / 100 : s;
+      }, 0);
+    }
+    if (c.type === 'checkbox') return `${t.entries.filter((e) => e.cells[c.id] === true).length} ✓`;
+    return '';
+  };
   return {
     rows: nb + 1,
-    cols: LEDGER_COLS.length,
+    cols: cols.length,
     body: nb,
     rowId: (r) => (r < nb ? t.entries[r].id : '__total'),
-    colKey: (c) => LEDGER_COLS[c].key,
+    colKey: (c) => cols[c]?.id ?? '',
     value(p) {
+      const col = cols[p.c];
+      if (!col) return null;
       if (p.r >= nb) {
-        if (p.c === 0) return 'Total';
-        if (p.c === 1) return t.entries.reduce((s, e) => Math.round((s + (e.amount ?? 0)) * 100) / 100, 0);
-        if (p.c === 2) return `${t.entries.filter((e) => e.date && e.amount !== null).length} entries`;
-        return '';
+        const v = total(col);
+        return p.c === 0 && v === '' ? `Total · ${nb}` : v;
       }
-      const e = t.entries[p.r];
-      return [e.date, e.amount, e.category, e.note][p.c];
+      return cellValue(col.type, t.entries[p.r].cells[col.id]);
     },
     raw(p) {
+      const col = cols[p.c];
       const e = t.entries[p.r];
-      if (!e) return '';
-      return p.c === 1 ? (e.amount === null ? '' : String(e.amount)) : [e.date, '', e.category, e.note][p.c];
+      return col && e ? cellRaw(col.type, e.cells[col.id]) : '';
     },
-    editable: (p) => (p.r < nb ? true : 'The total is calculated.'),
+    editable: (p) => (p.r < nb ? true : 'The total row is calculated.'),
     set(p, text) {
+      const col = cols[p.c];
       const e = t.entries[p.r];
-      if (!e) return true;
-      if (p.c === 0) {
-        if (!text.trim()) {
-          e.date = '';
-          return true;
-        }
-        const d = parseDate(text, 'mdy', now.getFullYear());
-        if (!d) return false;
-        e.date = d;
-      } else if (p.c === 1) {
-        const n = parseNumber(text);
-        if (n === undefined) return false;
-        e.amount = n;
-      } else if (p.c === 2) {
-        e.category = text.trim();
-      } else {
-        e.note = text.trim();
-      }
+      if (!col || !e || col.type === 'files') return true;
+      const v = parseCell(col.type, text, now);
+      if (v === undefined) return false;
+      if (v === null) delete e.cells[col.id];
+      else e.cells[col.id] = v;
       return true;
     },
     insertBodyRow: (at) => void t.entries.splice(at, 0, newEntry()),
-    alignRight: (c) => c === 1,
+    alignRight: (c) => cols[c]?.type === 'number',
+    cellType: (p) => (p.r >= nb ? 'calc' : (cols[p.c]?.type ?? 'text')),
+    isEmpty: (p) => p.r >= nb || !cols[p.c] || t.entries[p.r].cells[cols[p.c].id] === undefined,
   };
 }
 

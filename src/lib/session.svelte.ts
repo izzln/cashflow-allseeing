@@ -1,5 +1,6 @@
 import { localFileStore, useFileStore, type FileMeta } from './files';
 import { RemoteFileStore } from './remote';
+import { attachmentStore, RemoteAttachments } from './attachments';
 
 const UPLOADED_KEY = 'cashflow-allseeing.uploaded';
 
@@ -22,6 +23,7 @@ class Session {
       this.configured = !!data.configured;
       this.signedIn = !!data.signedIn;
       useFileStore(new RemoteFileStore('/api', () => (this.signedIn = false), () => this.signedIn));
+      attachmentStore.impl = new RemoteAttachments();
       this.mode = 'remote';
     } catch {
       this.mode = 'local';
