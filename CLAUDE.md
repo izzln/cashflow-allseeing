@@ -25,9 +25,6 @@ Stories Web App wins.** Don't copy its rules here; this file only adds what is s
   ✎ number typed over a linked row (`#b54708`), `#ERR` for a formula/source error (reason in tooltip and Inspector).
 - Cashflow grid: label column 200px, month columns 100px, two header rows (year, month; centred).
   Header-row text is always centred in both kinds of table (owner's decision), whatever the column type.
-- Sheet tabs (owner's decision, replaces the Tabs component's ‹ › × buttons): drag a tab to reorder (mouse, or
-  press-and-drag on touch); right-click / long-press / Shift+F10 opens the sheet menu (Rename, Duplicate, Move Left,
-  Move Right, Delete). Click the active tab or double-click to rename in place.
 - Canvas: tables snap to a 20px grid; a 40px margin surrounds the zoomed canvas. Zoom 25–400 %
   (steps 25, 50, 75, 100, 125, 150, 200, 300, 400). Row/column tabs live on an unscaled overlay with a fixed
   thickness (rows 20px / 30px touch, columns 15px / 23px touch).
