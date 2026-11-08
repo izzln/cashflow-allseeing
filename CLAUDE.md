@@ -20,8 +20,11 @@ There are no saved files to stay compatible with yet, so formats can still chang
 - Use Numbers' keyboard shortcuts where Numbers has one (⌥↑/⌥↓ insert row above/below, ⌥←/⌥→ insert column
   before/after, …), and show shortcuts in menus. All commands live in `src/lib/commands.ts`.
 - Edit in place (double-click / tap again) rather than in modal prompts.
-- Toolbar: icons (with short labels when there is room), grouped by purpose; related settings (cell
-  fill + text colour) are one control that opens a popover.
+- Layout: one top row — ‹ Files, file name (File menu) + save status, then the toolbar on the right;
+  sheet tabs on the row below.
+- Toolbar: icons grouped by purpose; related settings (cell fill + text colour) are one control that opens
+  a popover. As the window narrows: labels go first, then items move into a » overflow menu in
+  `OVERFLOW_ORDER` (least used first); the Inspector button always stays.
 
 ### Deliberate deviations from HIG
 - No in-page menu bar: a web page can't use the real macOS / iPadOS menu bar, and a fake one duplicates
@@ -63,7 +66,7 @@ There are no saved files to stay compatible with yet, so formats can still chang
   Data table: r = entries, then Total; c = the table's columns
 - `src/lib/store.svelte.ts` — single app state (Svelte 5 runes): selection, editing, undo (snapshots), paste, persistence
 - `src/components/` — App (hash routing `#/` list, `#/f/<id>` editor, `#/f/<id>/s/<sid>` read-only snapshot; keyboard + clipboard),
-  Home (file list), TopBar (back, FileMenu, SheetTabs), Toolbar (icons via Icon), MenuList / PopupMenus (context + touch
+  Home (file list), TopBar (back, FileMenu, Toolbar with measured overflow), SheetTabs row, Icon, MenuList / PopupMenus (context + touch
   edit menu), Canvas (zoom: scaled content + unscaled overlay holding TableTabs; cell editor; filled view), TableFrame
   (title, drag, pointer/touch selection) with CashflowGrid / TableGrid, Inspector + SourcePicker, ImportDialog,
   FilesPopover, StatusBar
