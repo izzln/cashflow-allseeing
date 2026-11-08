@@ -1,8 +1,8 @@
 import { currentMonth, isMonthKey, type MonthKey } from './months';
 
-/** Only ledger entries that pass every filter count. */
+/** Only dataTable entries that pass every filter count. */
 export interface Filter {
-  /** Ledger column id. */
+  /** Column id in the source table. */
   col: string;
   /** in: the cell equals one of `values` (text columns); contains: includes `text`; checked/unchecked: checkbox columns. */
   op: 'in' | 'contains' | 'checked' | 'unchecked';
@@ -10,19 +10,19 @@ export interface Filter {
   text: string;
 }
 
-/** A whole cash-flow row from a ledger: each month = sum of the amount column for entries dated in that month. */
+/** A whole cash-flow row from a dataTable: each month = sum of the amount column for entries dated in that month. */
 export interface RowSource {
-  ledgerId: string;
+  tableId: string;
   dateCol: string;
   amountCol: string;
   filters: Filter[];
-  /** Multiply by −1 (e.g. a ledger that records payments as positive numbers). */
+  /** Multiply by −1 (e.g. a dataTable that records payments as positive numbers). */
   flip: boolean;
 }
 
-/** One cash-flow cell from a ledger: the total of one number column over the matching entries (any date). */
+/** One cash-flow cell from a dataTable: the total of one number column over the matching entries (any date). */
 export interface CellSource {
-  ledgerId: string;
+  tableId: string;
   col: string;
   filters: Filter[];
   flip: boolean;
@@ -36,7 +36,7 @@ export interface Row {
    * On a source row these are overrides of the source's number.
    */
   values: Record<MonthKey, number>;
-  /** If set, the row's numbers come from a ledger. */
+  /** If set, the row's numbers come from a dataTable. */
   source?: RowSource;
   /** If set, the row is computed by this formula, e.g. `[Sales] * 6%`. */
   formula?: string;
@@ -60,9 +60,9 @@ interface TableBase {
 }
 
 /** A month-by-month cash-flow table. */
-export interface CashTable extends TableBase {
+export interface CashflowTable extends TableBase {
   kind: 'cashflow';
-  /** Cells that show a ledger column total, keyed by `${rowId}|${month}`. */
+  /** Cells that show a dataTable column total, keyed by `${rowId}|${month}`. */
   cellSources: Record<string, CellSource>;
   /** Balance at the start of openingMonth, before that month's cash flow. */
   openingBalance: number;
@@ -73,13 +73,13 @@ export interface CashTable extends TableBase {
 
 export type ColumnType = 'date' | 'number' | 'text' | 'checkbox' | 'files';
 
-export interface LedgerColumn {
+export interface Column {
   id: string;
   name: string;
   type: ColumnType;
 }
 
-/** A file attached to a ledger cell; the bytes are stored separately (see attachments). */
+/** A file attached to a dataTable cell; the bytes are stored separately (see attachments). */
 export interface Attachment {
   id: string;
   name: string;
@@ -90,17 +90,17 @@ export interface Attachment {
 /** date: 'YYYY-MM-DD'; number; text; checkbox: boolean; files: list. A missing key is an empty cell. */
 export type CellData = string | number | boolean | Attachment[];
 
-/** One row of a ledger. */
+/** One row of a dataTable. */
 export interface Entry {
   id: string;
   cells: Record<string, CellData>;
 }
 
-/** How a CSV/Excel file maps onto ledger columns; saved so re-imports are one step. */
+/** How a CSV/Excel file maps onto dataTable columns; saved so re-imports are one step. */
 export interface ImportMap {
   hasHeader: boolean;
   sheet: string;
-  /** Ledger column id → file column (a header name when hasHeader, else a 0-based index as text). */
+  /** Table column id → file column (a header name when hasHeader, else a 0-based index as text). */
   cols: Record<string, string>;
   /** Fill one number column from separate money-in and money-out file columns (in − out). */
   split: { col: string; income: string; expense: string } | null;
@@ -109,16 +109,16 @@ export interface ImportMap {
 }
 
 /** A list of dated amounts (entered by hand or imported) that cash-flow rows can draw on. */
-export interface LedgerTable extends TableBase {
-  kind: 'ledger';
-  columns: LedgerColumn[];
+export interface DataTable extends TableBase {
+  kind: 'table';
+  columns: Column[];
   entries: Entry[];
   importMap?: ImportMap;
   /** Name of the last imported file, for the "re-import" hint. */
   importedFrom?: string;
 }
 
-export type Table = CashTable | LedgerTable;
+export type Table = CashflowTable | DataTable;
 
 export interface Sheet {
   id: string;
@@ -152,8 +152,8 @@ export function newEntry(): Entry {
   return { id: uid(), cells: {} };
 }
 
-/** The columns a new ledger starts with. Fixed ids keep imports and sources simple. */
-export function defaultColumns(): LedgerColumn[] {
+/** The columns a new dataTable starts with. Fixed ids keep imports and sources simple. */
+export function defaultColumns(): Column[] {
   return [
     { id: 'date', name: 'Date', type: 'date' },
     { id: 'amount', name: 'Amount', type: 'number' },
@@ -162,7 +162,7 @@ export function defaultColumns(): LedgerColumn[] {
   ];
 }
 
-export function newTable(name: string, x = GRID * 2, y = GRID * 2): CashTable {
+export function newCashflow(name: string, x = GRID * 2, y = GRID * 2): CashflowTable {
   return {
     kind: 'cashflow',
     id: uid(),
@@ -178,9 +178,9 @@ export function newTable(name: string, x = GRID * 2, y = GRID * 2): CashTable {
   };
 }
 
-export function newLedger(name: string, x = GRID * 2, y = GRID * 2): LedgerTable {
+export function newDataTable(name: string, x = GRID * 2, y = GRID * 2): DataTable {
   return {
-    kind: 'ledger',
+    kind: 'table',
     id: uid(),
     name,
     x,
@@ -192,11 +192,11 @@ export function newLedger(name: string, x = GRID * 2, y = GRID * 2): LedgerTable
 }
 
 export function newSheet(name: string): Sheet {
-  return { id: uid(), name, tables: [newTable('Table 1')] };
+  return { id: uid(), name, tables: [newCashflow('Cashflow 1')] };
 }
 
 export function starterWorkbook(): Workbook {
-  const t = newTable('Main account');
+  const t = newCashflow('Main account');
   t.rows = ['Sales receipts', 'Payroll', 'Rent', 'Suppliers', 'Taxes'].map((l) => newRow(l));
   return {
     schema: 1,
@@ -205,9 +205,9 @@ export function starterWorkbook(): Workbook {
   };
 }
 
-/** Items in a table's body, in order: cash-flow rows or ledger entries. */
+/** Items in a table's body, in order: cash-flow rows or dataTable entries. */
 export function bodyItems(t: Table): { id: string }[] {
-  return t.kind === 'ledger' ? t.entries : t.rows;
+  return t.kind === 'table' ? t.entries : t.rows;
 }
 
 // ---------- loading ----------
@@ -234,14 +234,10 @@ function normFilters(v: unknown): Filter[] {
 }
 
 function normSource(s: any): RowSource | undefined {
-  if (!s || typeof s !== 'object' || typeof s.ledgerId !== 'string') return undefined;
+  if (!s || typeof s !== 'object' || typeof s.tableId !== 'string') return undefined;
   const filters = normFilters(s.filters);
-  // Earlier versions had fixed category / note filters.
-  const cats = arr(s.categories).map((c) => str(c)).filter(Boolean);
-  if (cats.length) filters.push({ col: 'category', op: 'in', values: cats, text: '' });
-  if (str(s.noteContains)) filters.push({ col: 'note', op: 'contains', values: [], text: str(s.noteContains) });
   return {
-    ledgerId: s.ledgerId,
+    tableId: s.tableId,
     dateCol: str(s.dateCol, 'date') || 'date',
     amountCol: str(s.amountCol, 'amount') || 'amount',
     filters,
@@ -250,8 +246,8 @@ function normSource(s: any): RowSource | undefined {
 }
 
 function normCellSource(s: any): CellSource | undefined {
-  if (!s || typeof s !== 'object' || typeof s.ledgerId !== 'string') return undefined;
-  return { ledgerId: s.ledgerId, col: str(s.col, 'amount') || 'amount', filters: normFilters(s.filters), flip: !!s.flip };
+  if (!s || typeof s !== 'object' || typeof s.tableId !== 'string') return undefined;
+  return { tableId: s.tableId, col: str(s.col, 'amount') || 'amount', filters: normFilters(s.filters), flip: !!s.flip };
 }
 
 function normRow(r: any): Row {
@@ -274,22 +270,16 @@ function normImportMap(m: any): ImportMap | undefined {
   if (!m || typeof m !== 'object') return undefined;
   const cols: Record<string, string> = {};
   let split: ImportMap['split'] = null;
-  if (m.cols && typeof m.cols === 'object') {
-    for (const [k, v] of Object.entries(m.cols)) if (typeof v === 'string' && v) cols[k] = v;
-    if (m.split && typeof m.split.col === 'string') {
-      split = { col: m.split.col, income: str(m.split.income), expense: str(m.split.expense) };
-    }
-  } else {
-    // Earlier versions mapped fixed fields.
-    for (const k of ['date', 'amount', 'category', 'note']) if (str(m[k])) cols[k] = str(m[k]);
-    if (str(m.income) || str(m.expense)) split = { col: 'amount', income: str(m.income), expense: str(m.expense) };
+  for (const [k, v] of Object.entries(m.cols ?? {})) if (typeof v === 'string' && v) cols[k] = v;
+  if (m.split && typeof m.split.col === 'string') {
+    split = { col: m.split.col, income: str(m.split.income), expense: str(m.split.expense) };
   }
   return { hasHeader: m.hasHeader !== false, sheet: str(m.sheet), cols, split, flip: !!m.flip };
 }
 
 const COLUMN_TYPES = ['date', 'number', 'text', 'checkbox', 'files'];
 
-function normColumns(v: unknown): LedgerColumn[] {
+function normColumns(v: unknown): Column[] {
   const seen = new Set<string>();
   const cols = arr(v)
     .filter((c) => c && typeof c.id === 'string' && !seen.has(c.id) && seen.add(c.id))
@@ -316,9 +306,8 @@ function normCell(type: ColumnType, v: unknown): CellData | undefined {
   }
 }
 
-function normEntry(e: any, columns: LedgerColumn[]): Entry {
-  // Earlier versions stored date / amount / category / note directly on the entry.
-  const raw = e?.cells && typeof e.cells === 'object' ? e.cells : { date: e?.date, amount: e?.amount, category: e?.category, note: e?.note };
+function normEntry(e: any, columns: Column[]): Entry {
+  const raw = e?.cells && typeof e.cells === 'object' ? e.cells : {};
   const cells: Record<string, CellData> = {};
   for (const c of columns) {
     const v = normCell(c.type, raw[c.id]);
@@ -335,11 +324,11 @@ function normTable(t: any): Table {
     y: num(t?.y),
     styles: normStyles(t?.styles),
   };
-  if (t?.kind === 'ledger') {
+  if (t?.kind === 'table') {
     const columns = normColumns(t.columns);
-    const l: LedgerTable = {
+    const l: DataTable = {
       ...base,
-      kind: 'ledger',
+      kind: 'table',
       columns,
       entries: arr(t.entries).map((e) => normEntry(e, columns)),
     };

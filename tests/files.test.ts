@@ -48,16 +48,6 @@ describe('LocalFileStore', () => {
     expect(await s.save(f.id, wb, f.rev)).toMatchObject({ ok: false, reason: 'conflict' });
   });
 
-  it('turns the phase 1 single workbook into a file', async () => {
-    const wb = starterWorkbook();
-    const kv = memKV({ 'cashflow-allseeing.workbook.v1': JSON.stringify(wb) });
-    const s = new LocalFileStore(kv);
-    const list = await s.list();
-    expect(list.map((f) => f.name)).toEqual(['My cash flow']);
-    expect((await s.load(list[0].id))?.wb.sheets[0].name).toBe('Operating');
-    expect(kv.m.has('cashflow-allseeing.workbook.v1')).toBe(false);
-  });
-
   it('takes, lists, loads and deletes manual snapshots', async () => {
     const s = new LocalFileStore(memKV());
     const f = await s.create('F');
@@ -120,11 +110,8 @@ describe('export files', () => {
     expect(await s.listSnapshots(copy.id)).toHaveLength(1);
   });
 
-  it('accepts earlier formats', () => {
-    const wb = starterWorkbook();
-    const v1 = { format: 'cashflow-allseeing', version: 1, name: 'Old', exportedAt: '2026-11-07T00:00:00Z', workbook: wb };
-    expect(fromExport(roundTrip(v1), 'x')).toMatchObject({ name: 'Old', snapshots: [] });
-    expect(fromExport(roundTrip(wb), 'bare')?.name).toBe('bare');
+  it('rejects files that are not cashflow downloads', () => {
+    expect(fromExport(roundTrip(starterWorkbook()), 'bare')).toBeNull();
     expect(fromExport({ hello: 1 }, 'x')).toBeNull();
   });
 

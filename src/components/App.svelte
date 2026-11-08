@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { app } from '../lib/store.svelte';
-  import SheetTabs from './SheetTabs.svelte';
   import Toolbar from './Toolbar.svelte';
   import Canvas from './Canvas.svelte';
   import Inspector from './Inspector.svelte';
@@ -9,7 +8,7 @@
   import Home from './Home.svelte';
   import Login from './Login.svelte';
   import FilesPopover from './FilesPopover.svelte';
-  import MenuBar from './MenuBar.svelte';
+  import TopBar from './TopBar.svelte';
   import PopupMenus from './PopupMenus.svelte';
   import ImportDialog from './ImportDialog.svelte';
   import { commandForKey, commands, isEnabled } from '../lib/commands';
@@ -64,7 +63,6 @@
       if (app.menu) app.menu = null;
       else if (app.filesCell) app.filesCell = null;
       else if (app.selection) app.selection = null;
-      else if (app.maximizedId) app.maximizedId = null;
       else app.focusTableId = null;
       return;
     }
@@ -84,9 +82,9 @@
     if (!app.selection) return;
     const mod = e.metaKey || e.ctrlKey;
     if (mod || e.altKey) return;
-    if (e.key === ' ' && app.table(app.selection.tableId)?.kind === 'ledger') {
+    if (e.key === ' ' && app.table(app.selection.tableId)?.kind === 'table') {
       const t = app.table(app.selection.tableId);
-      if (t?.kind === 'ledger' && t.columns[app.selection.anchor.c]?.type === 'checkbox') {
+      if (t?.kind === 'table' && t.columns[app.selection.anchor.c]?.type === 'checkbox') {
         e.preventDefault();
         app.toggleCheckboxes();
         return;
@@ -197,11 +195,10 @@
     <button onclick={route}>Try again</button>
   </div>
 {:else if view === 'file' && app.file}
-  {@const importLedger = app.importing ? app.table(app.importing.ledgerId) : undefined}
+  {@const importTable = app.importing ? app.table(app.importing.tableId) : undefined}
   <div class="shell">
-    <MenuBar />
+    <TopBar />
     <Toolbar />
-    <SheetTabs />
     <div class="main">
       <Canvas />
       {#if app.showInspector}
@@ -211,8 +208,8 @@
     <StatusBar />
     <FilesPopover />
     <PopupMenus />
-    {#if app.importing && importLedger?.kind === 'ledger'}
-      <ImportDialog ledger={importLedger} fileName={app.importing.fileName} sheets={app.importing.sheets} onclose={() => (app.importing = null)} />
+    {#if app.importing && importTable?.kind === 'table'}
+      <ImportDialog dataTable={importTable} fileName={app.importing.fileName} sheets={app.importing.sheets} onclose={() => (app.importing = null)} />
     {/if}
   </div>
   {#if session.mode === 'remote' && !session.signedIn}

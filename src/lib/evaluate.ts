@@ -1,6 +1,6 @@
 import { evaluate, FormulaError, parseFormula, type Node } from './formula';
-import { matchesFilters } from './ledger';
-import type { CashTable, CellSource, FooterRow, LedgerTable, Row, RowSource, Workbook } from './model';
+import { matchesFilters } from './columns';
+import type { CashflowTable, CellSource, FooterRow, DataTable, Row, RowSource, Workbook } from './model';
 import { addMonths, type MonthKey } from './months';
 
 /** What a cell shows: a number, empty, or an error message. */
@@ -26,17 +26,17 @@ const norm = (s: string) => s.trim().toLowerCase();
  * results are cached inside, so asking for the same cell twice is cheap.
  */
 export class Evaluator {
-  private cashTables: CashTable[] = [];
-  private ledgers = new Map<string, LedgerTable>();
+  private cashTables: CashflowTable[] = [];
+  private dataTables = new Map<string, DataTable>();
   private memo = new Map<string, number | null | FormulaError>();
   private busy = new Set<string>();
   private parsed = new Map<string, Node | FormulaError>();
-  private ledgerSums = new Map<string, Map<MonthKey, number>>();
+  private sourceSums = new Map<string, Map<MonthKey, number>>();
 
   constructor(wb: Workbook) {
     for (const s of wb.sheets) {
       for (const t of s.tables) {
-        if (t.kind === 'ledger') this.ledgers.set(t.id, t);
+        if (t.kind === 'table') this.dataTables.set(t.id, t);
         else this.cashTables.push(t);
       }
     }
@@ -44,20 +44,20 @@ export class Evaluator {
 
   // ---------- public, error-safe ----------
 
-  row(t: CashTable, row: Row, m: MonthKey): CellValue {
+  row(t: CashflowTable, row: Row, m: MonthKey): CellValue {
     return this.safe(() => this.rowNum(t, row, m));
   }
 
-  cashFlow(t: CashTable, m: MonthKey): CellValue {
+  cashFlow(t: CashflowTable, m: MonthKey): CellValue {
     return this.safe(() => this.cashFlowNum(t, m));
   }
 
-  balance(t: CashTable, m: MonthKey): CellValue {
+  balance(t: CashflowTable, m: MonthKey): CellValue {
     if (m < t.openingMonth) return null;
     return this.safe(() => this.balanceNum(t, m));
   }
 
-  footer(t: CashTable, f: FooterRow, m: MonthKey): CellValue {
+  footer(t: CashflowTable, f: FooterRow, m: MonthKey): CellValue {
     return this.safe(() => this.formulaNum(t, `f:${f.id}`, f.formula, m));
   }
 
@@ -106,7 +106,7 @@ export class Evaluator {
     }
   }
 
-  private rowNum(t: CashTable, row: Row, m: MonthKey): number | null {
+  private rowNum(t: CashflowTable, row: Row, m: MonthKey): number | null {
     return this.cached(`${t.id}|${row.id}|${m}`, () => {
       if (row.formula !== undefined) return this.formulaNum(t, row.id, row.formula, m);
       const cell = t.cellSources[`${row.id}|${m}`];
@@ -117,7 +117,7 @@ export class Evaluator {
     });
   }
 
-  private cashFlowNum(t: CashTable, m: MonthKey): number {
+  private cashFlowNum(t: CashflowTable, m: MonthKey): number {
     return this.cached(`${t.id}|cf|${m}`, () => {
       let sum = 0;
       for (const row of t.rows) {
@@ -132,7 +132,7 @@ export class Evaluator {
     }) as number;
   }
 
-  private balanceNum(t: CashTable, m: MonthKey): number | null {
+  private balanceNum(t: CashflowTable, m: MonthKey): number | null {
     if (m < t.openingMonth) return null;
     // Walk forward from the opening month so long histories don't recurse deeply.
     let k = t.openingMonth;
@@ -163,7 +163,7 @@ export class Evaluator {
     return p;
   }
 
-  private formulaNum(t: CashTable, id: string, src: string, m: MonthKey): number {
+  private formulaNum(t: CashflowTable, id: string, src: string, m: MonthKey): number {
     return this.cached(`${t.id}|${id}|${m}|fx`, () => {
       const node = this.parse(src);
       if (node instanceof FormulaError) throw node;
@@ -175,7 +175,7 @@ export class Evaluator {
     }) as number;
   }
 
-  private findTable(name: string): CashTable {
+  private findTable(name: string): CashflowTable {
     const hits = this.cashTables.filter((x) => norm(x.name) === norm(name));
     if (hits.length === 0) throw new FormulaError(`No table named "${name}"`);
     if (hits.length > 1) throw new FormulaError(`Several tables are named "${name}"`);
@@ -183,7 +183,7 @@ export class Evaluator {
   }
 
   /** A reference inside a formula: rows by label, then footer rows, Net cash flow and Balance. */
-  private refNum(from: CashTable, tableName: string | null, label: string, m: MonthKey): number {
+  private refNum(from: CashflowTable, tableName: string | null, label: string, m: MonthKey): number {
     const t = tableName === null ? from : this.findTable(tableName);
     const want = norm(label);
     const rows = t.rows.filter((r) => norm(r.label) === want);
@@ -197,30 +197,30 @@ export class Evaluator {
     throw new FormulaError(`No row named "${label}"${tableName ? ` in "${t.name}"` : ''}`);
   }
 
-  private ledger(id: string): LedgerTable {
-    const l = this.ledgers.get(id);
-    if (!l) throw new FormulaError('The source ledger was deleted');
+  private dataTable(id: string): DataTable {
+    const l = this.dataTables.get(id);
+    if (!l) throw new FormulaError('The source table was deleted');
     return l;
   }
 
   private sums(source: RowSource): Map<MonthKey, number> {
     const key = JSON.stringify(source);
-    let map = this.ledgerSums.get(key);
+    let map = this.sourceSums.get(key);
     if (map) return map;
-    const ledger = this.ledger(source.ledgerId);
-    const date = ledger.columns.find((c) => c.id === source.dateCol && c.type === 'date');
-    const amount = ledger.columns.find((c) => c.id === source.amountCol && c.type === 'number');
+    const dataTable = this.dataTable(source.tableId);
+    const date = dataTable.columns.find((c) => c.id === source.dateCol && c.type === 'date');
+    const amount = dataTable.columns.find((c) => c.id === source.amountCol && c.type === 'number');
     if (!date) throw new FormulaError('Choose a date column for this row');
     if (!amount) throw new FormulaError('Choose a number column for this row');
     map = new Map();
-    for (const e of ledger.entries) {
+    for (const e of dataTable.entries) {
       const d = e.cells[date.id];
       const v = e.cells[amount.id];
       if (typeof d !== 'string' || typeof v !== 'number' || !matchesFilters(e, source.filters)) continue;
       const k = d.slice(0, 7);
       map.set(k, (map.get(k) ?? 0) + (source.flip ? -v : v));
     }
-    this.ledgerSums.set(key, map);
+    this.sourceSums.set(key, map);
     return map;
   }
 
@@ -231,12 +231,12 @@ export class Evaluator {
   }
 
   private cellSourceNum(source: CellSource): number | null {
-    const ledger = this.ledger(source.ledgerId);
-    const col = ledger.columns.find((c) => c.id === source.col && c.type === 'number');
+    const dataTable = this.dataTable(source.tableId);
+    const col = dataTable.columns.find((c) => c.id === source.col && c.type === 'number');
     if (!col) throw new FormulaError('Choose a number column for this cell');
     let sum = 0;
     let any = false;
-    for (const e of ledger.entries) {
+    for (const e of dataTable.entries) {
       const v = e.cells[col.id];
       if (typeof v !== 'number' || !matchesFilters(e, source.filters)) continue;
       sum += source.flip ? -v : v;

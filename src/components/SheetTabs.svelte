@@ -65,11 +65,9 @@
     display: flex;
     align-items: center;
     gap: 4px;
-    padding: 6px 12px;
-    background: var(--panel);
-    border-bottom: 1px solid var(--line);
     overflow-x: auto;
-    flex-shrink: 0;
+    min-width: 0;
+    flex: 1;
   }
   .tab {
     display: flex;

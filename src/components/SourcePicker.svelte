@@ -1,15 +1,15 @@
 <script lang="ts">
   import { app } from '../lib/store.svelte';
-  import { distinctValues } from '../lib/ledger';
-  import type { Filter, LedgerTable } from '../lib/model';
+  import { distinctValues } from '../lib/columns';
+  import type { Filter, DataTable } from '../lib/model';
 
   /**
-   * Choose a ledger, its columns and filters. `mode: 'row'` needs a date column
+   * Choose a dataTable, its columns and filters. `mode: 'row'` needs a date column
    * (monthly sums); `mode: 'cell'` totals one number column over all dates.
    */
   let {
     mode,
-    ledgerId,
+    tableId,
     dateCol = '',
     numberCol,
     filters,
@@ -18,20 +18,20 @@
     onchange,
   }: {
     mode: 'row' | 'cell';
-    ledgerId: string;
+    tableId: string;
     dateCol?: string;
     numberCol: string;
     filters: Filter[];
     flip: boolean;
     disabled?: boolean;
-    onchange: (patch: { ledgerId?: string; dateCol?: string; numberCol?: string; filters?: Filter[]; flip?: boolean }) => void;
+    onchange: (patch: { tableId?: string; dateCol?: string; numberCol?: string; filters?: Filter[]; flip?: boolean }) => void;
   } = $props();
 
-  const ledgers = $derived(app.ledgers());
-  const ledger = $derived(ledgers.find((l) => l.ledger.id === ledgerId)?.ledger as LedgerTable | undefined);
-  const dateCols = $derived(ledger?.columns.filter((c) => c.type === 'date') ?? []);
-  const numberCols = $derived(ledger?.columns.filter((c) => c.type === 'number') ?? []);
-  const filterCols = $derived(ledger?.columns.filter((c) => c.type === 'text' || c.type === 'checkbox') ?? []);
+  const dataTables = $derived(app.dataTables());
+  const dataTable = $derived(dataTables.find((l) => l.dataTable.id === tableId)?.dataTable as DataTable | undefined);
+  const dateCols = $derived(dataTable?.columns.filter((c) => c.type === 'date') ?? []);
+  const numberCols = $derived(dataTable?.columns.filter((c) => c.type === 'number') ?? []);
+  const filterCols = $derived(dataTable?.columns.filter((c) => c.type === 'text' || c.type === 'checkbox') ?? []);
   const value = (e: Event) => (e.target as HTMLInputElement | HTMLSelectElement).value;
 
   function setFilter(i: number, patch: Partial<Filter>) {
@@ -56,16 +56,16 @@
   }
 </script>
 
-{#if ledgers.length === 0}
-  <p class="warn">There is no ledger in this file yet. Add one with Insert › Ledger.</p>
+{#if dataTables.length === 0}
+  <p class="warn">There is no table in this file yet. Add one with the Table button in the toolbar.</p>
 {:else}
-  <label>Ledger
-    <select value={ledgerId} {disabled} onchange={(e) => onchange({ ledgerId: value(e) })}>
-      {#if !ledger}<option value="">— choose —</option>{/if}
-      {#each ledgers as l (l.ledger.id)}<option value={l.ledger.id}>{l.sheet} › {l.ledger.name}</option>{/each}
+  <label>Table
+    <select value={tableId} {disabled} onchange={(e) => onchange({ tableId: value(e) })}>
+      {#if !dataTable}<option value="">— choose —</option>{/if}
+      {#each dataTables as l (l.dataTable.id)}<option value={l.dataTable.id}>{l.sheet} › {l.dataTable.name}</option>{/each}
     </select>
   </label>
-  {#if ledger}
+  {#if dataTable}
     {#if mode === 'row'}
       <label>Date column
         <select value={dateCol} {disabled} onchange={(e) => onchange({ dateCol: value(e) })}>
@@ -105,7 +105,7 @@
             {#if !disabled}<button class="x" title="Remove filter" aria-label="Remove filter" onclick={() => onchange({ filters: filters.filter((_, j) => j !== i) })}>×</button>{/if}
           </div>
           {#if col && col.type !== 'checkbox' && f.op === 'in'}
-            {@const vals = distinctValues(ledger, col.id)}
+            {@const vals = distinctValues(dataTable, col.id)}
             {#if vals.length === 0}
               <p class="hint">No values in this column yet.</p>
             {:else}

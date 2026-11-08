@@ -2,19 +2,19 @@
   import { tick } from 'svelte';
   import { app, ROW_H } from '../lib/store.svelte';
   import { formatNumber } from '../lib/format';
-  import { cellsInRanges, columnWidth, ledgerModel, styleKey } from '../lib/grid';
-  import { cellDisplay } from '../lib/ledger';
-  import type { Attachment, LedgerTable } from '../lib/model';
+  import { cellsInRanges, columnWidth, dataTableModel, styleKey } from '../lib/grid';
+  import { cellDisplay } from '../lib/columns';
+  import type { Attachment, DataTable } from '../lib/model';
   import { STYLE_BY_ID } from '../lib/styles';
 
-  let { table }: { table: LedgerTable } = $props();
+  let { table }: { table: DataTable } = $props();
 
   const sel = $derived(app.selection?.tableId === table.id ? app.selection : null);
   const selected = $derived(new Set(sel ? cellsInRanges(sel.ranges).map((p) => `${p.r},${p.c}`) : []));
   const nb = $derived(table.entries.length);
   const totals = $derived.by(() => {
     app.version;
-    const m = ledgerModel(table);
+    const m = dataTableModel(table);
     return table.columns.map((_, c) => m.value({ r: nb, c }));
   });
 

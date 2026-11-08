@@ -2,7 +2,6 @@
   import { tick, type Snippet } from 'svelte';
   import { app, TITLE_H } from '../lib/store.svelte';
   import { cellsInRanges, type Pos } from '../lib/grid';
-  import TableTabs from './TableTabs.svelte';
   import type { Table } from '../lib/model';
 
   let { table, children, maximized = false }: { table: Table; children: Snippet; maximized?: boolean } = $props();
@@ -34,7 +33,7 @@
     return r ? { x: r.left + r.width / 2, y: r.top } : { x: 100, y: 100 };
   }
 
-  function openMenu(kind: 'context' | 'edit', target: 'cells' | 'table' | 'column', x: number, y: number) {
+  function openMenu(kind: 'context' | 'edit', target: 'cells' | 'table' | 'column' | 'rows' | 'columns', x: number, y: number) {
     app.menu = { kind, target, tableId: table.id, x, y };
   }
 
@@ -152,7 +151,8 @@
     if (!p) return;
     if (app.editing) app.commitEdit();
     if (!selected.has(`${p.r},${p.c}`)) app.select(table.id, p);
-    openMenu('context', 'cells', e.clientX, e.clientY);
+    const lines = app.selection?.lines;
+    openMenu('context', lines === 'row' ? 'rows' : lines === 'col' ? 'columns' : 'cells', e.clientX, e.clientY);
   }
 
   function onDblClick(e: MouseEvent) {
@@ -194,7 +194,8 @@
       app.bringToFront(table.id);
       moveStart.checkpointed = true;
     }
-    app.moveTable(table.id, moveStart.tx + dx, moveStart.ty + dy);
+    // Pointer moves are in screen pixels; table positions are in unzoomed canvas pixels.
+    app.moveTable(table.id, moveStart.tx + dx / app.zoom, moveStart.ty + dy / app.zoom);
   }
 
   function onTitleUp(e: PointerEvent) {
@@ -228,8 +229,7 @@
   }
 </script>
 
-<div class="frame" class:max={maximized} bind:this={frameEl} style={maximized ? '' : `left:${table.x}px;top:${table.y}px`}>
-{#if app.focusTableId === table.id && !maximized}<TableTabs {table} frame={frameEl} />{/if}
+<div class="frame" data-frame={table.id} class:max={maximized} bind:this={frameEl} style={maximized ? '' : `left:${table.x}px;top:${table.y}px`}>
 <div class="table" class:focused={app.focusTableId === table.id && !maximized}>
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
@@ -263,7 +263,7 @@
     {:else}
       <span class="name" title={app.readonly ? table.name : 'Double-click to rename'}>{table.name}</span>
     {/if}
-    {#if table.kind === 'ledger'}<span class="kind">Ledger</span>{/if}
+    {#if table.kind === 'cashflow'}<span class="kind">Cashflow</span>{/if}
     <span class="grow"></span>
     <button
       class="max-btn"

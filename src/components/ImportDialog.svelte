@@ -3,30 +3,30 @@
   import { app } from '../lib/store.svelte';
   import { formatNumber } from '../lib/format';
   import { amountColumn, buildEntries, columnOf, guessMap } from '../lib/import/mapping';
-  import { cellDisplay } from '../lib/ledger';
+  import { cellDisplay } from '../lib/columns';
   import type { SheetData } from '../lib/import/xlsx';
-  import type { ImportMap, LedgerTable } from '../lib/model';
+  import type { ImportMap, DataTable } from '../lib/model';
 
-  let { ledger, fileName, sheets, onclose }: {
-    ledger: LedgerTable;
+  let { dataTable, fileName, sheets, onclose }: {
+    dataTable: DataTable;
     fileName: string;
     sheets: SheetData[];
     onclose: () => void;
   } = $props();
 
-  const columns = untrack(() => ledger.columns.filter((c) => c.type !== 'files'));
-  const mainCol = untrack(() => amountColumn(ledger.columns));
+  const columns = untrack(() => dataTable.columns.filter((c) => c.type !== 'files'));
+  const mainCol = untrack(() => amountColumn(dataTable.columns));
 
-  // Start from the ledger's saved mapping when it still fits the file, else guess from the header.
+  // Start from the dataTable's saved mapping when it still fits the file, else guess from the header.
   function initial(): ImportMap {
-    const saved = ledger.importMap;
+    const saved = dataTable.importMap;
     const sheet = sheets.find((s) => s.name === saved?.sheet) ?? sheets[0];
     const header = sheet.rows[0] ?? [];
     if (saved && Object.keys(saved.cols).length + (saved.split ? 1 : 0) > 0) {
       const names = [...Object.values(saved.cols), saved.split?.income ?? '', saved.split?.expense ?? ''].filter(Boolean);
       if (names.every((n) => columnOf(n, header, saved.hasHeader) >= 0)) return { ...saved, sheet: sheet.name };
     }
-    return { ...guessMap(header, ledger.columns), hasHeader: true, flip: false, sheet: sheet.name };
+    return { ...guessMap(header, dataTable.columns), hasHeader: true, flip: false, sheet: sheet.name };
   }
 
   let map = $state<ImportMap>(untrack(initial));
@@ -42,7 +42,7 @@
         : { value: String(i), label: `Column ${i + 1}: ${sheet.rows[0]?.[i] ?? ''}` },
     ).filter((o) => o.value !== ''),
   );
-  const result = $derived(buildEntries(sheet.rows, map, ledger.columns));
+  const result = $derived(buildEntries(sheet.rows, map, dataTable.columns));
   const total = $derived(
     mainCol ? result.entries.reduce((s, e) => s + (typeof e.cells[mainCol.id] === 'number' ? (e.cells[mainCol.id] as number) : 0), 0) : 0,
   );
@@ -50,13 +50,13 @@
 
   function setHeader(on: boolean) {
     map = on
-      ? { ...map, ...guessMap(header, ledger.columns), hasHeader: true }
+      ? { ...map, ...guessMap(header, dataTable.columns), hasHeader: true }
       : { ...map, hasHeader: false, cols: {}, split: null };
   }
 
   function setSheet(name: string) {
     const s = sheets.find((x) => x.name === name) ?? sheets[0];
-    map = { ...map, ...(map.hasHeader ? guessMap(s.rows[0] ?? [], ledger.columns) : { cols: {}, split: null }), sheet: s.name };
+    map = { ...map, ...(map.hasHeader ? guessMap(s.rows[0] ?? [], dataTable.columns) : { cols: {}, split: null }), sheet: s.name };
   }
 
   function setCol(colId: string, value: string) {
@@ -78,14 +78,14 @@
   }
 
   function confirmImport() {
-    app.importEntries(ledger.id, result.entries, mode, $state.snapshot(map) as ImportMap, fileName);
+    app.importEntries(dataTable.id, result.entries, mode, $state.snapshot(map) as ImportMap, fileName);
     onclose();
   }
 </script>
 
-<div class="overlay" role="dialog" aria-modal="true" aria-label="Import into ledger">
+<div class="overlay" role="dialog" aria-modal="true" aria-label="Import into table">
   <div class="dialog">
-    <h2>Import into “{ledger.name}”</h2>
+    <h2>Import into “{dataTable.name}”</h2>
     <p class="file">{fileName}</p>
 
     <div class="grid">
@@ -136,7 +136,7 @@
     </div>
 
     <div class="summary">
-      <b>{result.entries.length}</b> entries{#if mainCol}, {mainCol.name} total <b class:neg={total < 0}>{formatNumber(total)}</b>{/if}
+      <b>{result.entries.length}</b> rows{#if mainCol}, {mainCol.name} total <b class:neg={total < 0}>{formatNumber(total)}</b>{/if}
       {#if result.skipped}· {result.skipped} row(s) skipped (no valid date or amount){/if}
       {#if result.missing.length}<div class="warn">Not found in this file: {result.missing.join(', ')}</div>{/if}
     </div>
@@ -159,8 +159,8 @@
 
     <div class="actions">
       <select bind:value={mode} aria-label="Import mode">
-        <option value="replace">Replace all entries in the ledger</option>
-        <option value="append">Add to the existing entries</option>
+        <option value="replace">Replace all rows in the table</option>
+        <option value="append">Add to the existing rows</option>
       </select>
       <span class="spacer"></span>
       <button onclick={onclose}>Cancel</button>

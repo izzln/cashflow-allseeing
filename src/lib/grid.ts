@@ -1,7 +1,7 @@
 import { isErr, type CellValue, type Evaluator } from './evaluate';
 import { parseNumber } from './format';
-import { cellRaw, cellValue, parseCell } from './ledger';
-import { newEntry, newRow, type CashTable, type ColumnType, type LedgerColumn, type LedgerTable, type Table } from './model';
+import { cellRaw, cellValue, parseCell } from './columns';
+import { newEntry, newRow, type CashflowTable, type ColumnType, type Column, type DataTable, type Table } from './model';
 import type { MonthKey } from './months';
 
 /** Cell position inside a table. r: body rows, then footer rows. c: column. */
@@ -22,7 +22,7 @@ export const FIXED_FOOTERS = [
 
 const TYPE_WIDTH: Record<ColumnType, number> = { date: 112, number: 120, text: 160, checkbox: 90, files: 190 };
 
-export function columnWidth(c: LedgerColumn): number {
+export function columnWidth(c: Column): number {
   return c.id === 'note' && c.type === 'text' ? 240 : TYPE_WIDTH[c.type];
 }
 
@@ -92,7 +92,7 @@ export interface GridModel {
 
 const num = (v: CellValue): number | null => (isErr(v) ? null : v);
 
-export function cashModel(t: CashTable, months: MonthKey[], ev: Evaluator): GridModel {
+export function cashflowModel(t: CashflowTable, months: MonthKey[], ev: Evaluator): GridModel {
   const nb = t.rows.length;
   const nf = FIXED_FOOTERS.length;
   const footerId = (r: number) => (r - nb < nf ? FIXED_FOOTERS[r - nb].id : t.footers[r - nb - nf].id);
@@ -148,7 +148,7 @@ export function cashModel(t: CashTable, months: MonthKey[], ev: Evaluator): Grid
       const n = parseNumber(text);
       if (n === undefined) return false;
       const m = months[p.c - 1];
-      // Typing (or clearing) replaces a ledger total shown in this cell.
+      // Typing (or clearing) replaces a dataTable total shown in this cell.
       delete t.cellSources[`${row.id}|${m}`];
       // On a source row, clearing a cell goes back to the source's number.
       if (n === null) delete row.values[m];
@@ -168,10 +168,10 @@ export function cashModel(t: CashTable, months: MonthKey[], ev: Evaluator): Grid
   };
 }
 
-export function ledgerModel(t: LedgerTable, now = new Date()): GridModel {
+export function dataTableModel(t: DataTable, now = new Date()): GridModel {
   const nb = t.entries.length;
   const cols = t.columns;
-  const total = (c: LedgerColumn): string | number => {
+  const total = (c: Column): string | number => {
     if (c.type === 'number') {
       return t.entries.reduce((s, e) => {
         const v = e.cells[c.id];
@@ -220,5 +220,5 @@ export function ledgerModel(t: LedgerTable, now = new Date()): GridModel {
 }
 
 export function gridModel(t: Table, months: MonthKey[], ev: Evaluator): GridModel {
-  return t.kind === 'ledger' ? ledgerModel(t) : cashModel(t, months, ev);
+  return t.kind === 'table' ? dataTableModel(t) : cashflowModel(t, months, ev);
 }

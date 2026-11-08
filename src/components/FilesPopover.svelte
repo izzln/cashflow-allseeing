@@ -4,7 +4,7 @@
 
   const target = $derived(app.filesCell);
   const table = $derived(target ? app.table(target.tableId) : undefined);
-  const column = $derived(table?.kind === 'ledger' ? table.columns.find((c) => c.id === target?.colId) : undefined);
+  const column = $derived(table?.kind === 'table' ? table.columns.find((c) => c.id === target?.colId) : undefined);
   const list = $derived(target ? app.attachmentsOf(target.tableId, target.rowId, target.colId) : []);
   let inputEl = $state<HTMLInputElement | null>(null);
   let busy = $state(false);
@@ -15,8 +15,8 @@
     if (!target || typeof window === 'undefined') return '';
     const cell = document.querySelector<HTMLElement>(`td[data-t="${target.tableId}"][data-files]`);
     const rows = [...document.querySelectorAll<HTMLElement>(`td[data-t="${target.tableId}"]`)];
-    const entryIndex = table?.kind === 'ledger' ? table.entries.findIndex((e) => e.id === target.rowId) : -1;
-    const col = table?.kind === 'ledger' ? table.columns.findIndex((c) => c.id === target.colId) : -1;
+    const entryIndex = table?.kind === 'table' ? table.entries.findIndex((e) => e.id === target.rowId) : -1;
+    const col = table?.kind === 'table' ? table.columns.findIndex((c) => c.id === target.colId) : -1;
     const el = rows.find((td) => td.dataset.r === String(entryIndex) && td.dataset.c === String(col)) ?? cell;
     if (!el || window.innerWidth < 600) return '';
     const r = el.getBoundingClientRect();

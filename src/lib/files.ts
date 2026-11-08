@@ -79,7 +79,6 @@ export interface KV {
 
 const PREFIX = 'cashflow-allseeing.';
 const INDEX_KEY = `${PREFIX}files`;
-const LEGACY_KEY = `${PREFIX}workbook.v1`;
 
 export function fileKey(id: string): string {
   return `${PREFIX}file.${id}`;
@@ -105,9 +104,7 @@ function monthOf(ts: number): MonthKey {
 export class LocalFileStore implements FileStore {
   readonly kind = 'local';
 
-  constructor(private kv: KV) {
-    this.migrateLegacy();
-  }
+  constructor(private kv: KV) {}
 
   private readJSON<T>(key: string, fallback: T): T {
     try {
@@ -142,19 +139,6 @@ export class LocalFileStore implements FileStore {
 
   private readWorkbook(key: string): Workbook | null {
     return normalizeWorkbook(this.readJSON<unknown>(key, null));
-  }
-
-  /** Phase 1 kept a single workbook; turn it into the first file. */
-  private migrateLegacy() {
-    const raw = this.kv.getItem(LEGACY_KEY);
-    if (raw === null) return;
-    try {
-      const wb = normalizeWorkbook(JSON.parse(raw));
-      if (wb) this.createSync('My cash flow', wb, []);
-      this.kv.removeItem(LEGACY_KEY);
-    } catch {
-      // Leave the old data in place if it cannot be read.
-    }
   }
 
   private createSync(name: string, wb: Workbook, snapshots: SnapshotDoc[]): FileMeta {
@@ -360,23 +344,20 @@ function normalizeSnapshotMeta(raw: any): SnapshotMeta | null {
   };
 }
 
-/** Read a downloaded file. Also accepts the earlier formats (v1 and bare workbooks). */
+/** Read a downloaded file. */
 export function fromExport(
   raw: unknown,
   fallbackName: string,
 ): { name: string; wb: Workbook; snapshots: SnapshotDoc[]; exportedAt?: string } | null {
-  if (raw && typeof raw === 'object' && (raw as ExportFile).format === EXPORT_FORMAT) {
-    const f = raw as ExportFile;
-    const wb = normalizeWorkbook(f.workbook);
-    if (!wb) return null;
-    const snapshots = (Array.isArray(f.snapshots) ? f.snapshots : [])
-      .map((s) => ({ meta: normalizeSnapshotMeta(s?.meta), wb: normalizeWorkbook(s?.workbook) }))
-      .filter((s): s is SnapshotDoc => !!s.meta && !!s.wb);
-    const exportedAt = typeof f.exportedAt === 'string' ? f.exportedAt.slice(0, 10) : undefined;
-    return { name: String(f.name || fallbackName), wb, snapshots, exportedAt };
-  }
-  const wb = normalizeWorkbook(raw);
-  return wb ? { name: fallbackName, wb, snapshots: [] } : null;
+  const f = raw as ExportFile;
+  if (!f || typeof f !== 'object' || f.format !== EXPORT_FORMAT) return null;
+  const wb = normalizeWorkbook(f.workbook);
+  if (!wb) return null;
+  const snapshots = (Array.isArray(f.snapshots) ? f.snapshots : [])
+    .map((s) => ({ meta: normalizeSnapshotMeta(s?.meta), wb: normalizeWorkbook(s?.workbook) }))
+    .filter((s): s is SnapshotDoc => !!s.meta && !!s.wb);
+  const exportedAt = typeof f.exportedAt === 'string' ? f.exportedAt.slice(0, 10) : undefined;
+  return { name: String(f.name || fallbackName), wb, snapshots, exportedAt };
 }
 
 /** Name for an imported file, so it can't be mistaken for the file it came from. */

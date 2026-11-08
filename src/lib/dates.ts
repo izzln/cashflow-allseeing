@@ -1,4 +1,4 @@
-/** Dates in ledgers are stored as 'YYYY-MM-DD'. */
+/** Dates in dataTables are stored as 'YYYY-MM-DD'. */
 
 export type DateOrder = 'ymd' | 'mdy' | 'dmy';
 

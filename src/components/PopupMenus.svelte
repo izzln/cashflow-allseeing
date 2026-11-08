@@ -33,12 +33,23 @@
   function backdropClick() {
     if (performance.now() - openedAt > 400) close();
   }
+
+  // The touch edit menu has no backdrop: a tap anywhere else closes it and still does
+  // what it was aimed at (e.g. a toolbar button), as on iPadOS.
+  $effect(() => {
+    if (app.menu?.kind !== 'edit') return;
+    const onDown = (e: PointerEvent) => {
+      if (!(e.target as Element | null)?.closest?.('.edit')) close();
+    };
+    window.addEventListener('pointerdown', onDown, true);
+    return () => window.removeEventListener('pointerdown', onDown, true);
+  });
 </script>
 
 {#if menu}
-  <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
-  <div class="backdrop" class:clear={menu.kind === 'edit'} onclick={backdropClick} oncontextmenu={(e) => { e.preventDefault(); close(); }}></div>
   {#if menu.kind === 'context'}
+    <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
+    <div class="backdrop" onclick={backdropClick} oncontextmenu={(e) => { e.preventDefault(); close(); }}></div>
     <div class="ctx" style={pos} bind:clientWidth={w} bind:clientHeight={h}>
       <MenuList items={contextItems(menu.target)} onclose={close} />
     </div>
