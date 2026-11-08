@@ -24,6 +24,7 @@ import {
   type Align,
   type Table,
   type Workbook,
+  type Sheet,
 } from './model';
 import { parseMonth, visibleWindow } from './months';
 import { downloadText } from './download';
@@ -131,7 +132,7 @@ class AppState {
   /** Table column whose header is being renamed in place. */
   renamingColumn = $state<{ tableId: string; colId: string } | null>(null);
   /** An open context menu (right-click / long-press) or edit menu (after a tap), in viewport pixels. */
-  menu = $state<{ kind: 'context' | 'edit'; target: 'cells' | 'table' | 'column' | 'rows' | 'columns'; tableId: string; x: number; y: number } | null>(null);
+  menu = $state<{ kind: 'context' | 'edit'; target: 'cells' | 'table' | 'column' | 'rows' | 'columns' | 'sheet'; tableId: string; x: number; y: number } | null>(null);
   /** A spreadsheet being mapped in the import dialog. */
   importing = $state<{ tableId: string; fileName: string; sheets: SheetData[] } | null>(null);
   /** Table shown filling the whole workspace. */
@@ -580,6 +581,33 @@ class AppState {
     this.flashNotice(`Deleted sheet “${this.wb.sheets[idx].name}”.`, 'info', { label: 'Undo', run: () => this.undo() });
     this.change(() => this.wb.sheets.splice(idx, 1));
     if (this.activeSheetId === id) this.setSheet(this.wb.sheets[Math.max(0, idx - 1)].id);
+  }
+
+  /** Sheet whose tab is being renamed in place (started from the tab or its menu). */
+  renamingSheetId = $state<string | null>(null);
+
+  /** Move a sheet so it sits before the sheet now at index `to` (or last). Used by tab drag & drop. */
+  moveSheetTo(id: string, to: number) {
+    const i = this.wb.sheets.findIndex((s) => s.id === id);
+    if (i < 0 || this.readonly) return;
+    const target = to > i ? to - 1 : to;
+    if (target === i || target < 0 || target >= this.wb.sheets.length) return;
+    this.change(() => {
+      const [s] = this.wb.sheets.splice(i, 1);
+      this.wb.sheets.splice(target, 0, s);
+    });
+  }
+
+  /** Copy a sheet (tables get new ids) right after the original, and show it. */
+  duplicateSheet(id: string) {
+    const i = this.wb.sheets.findIndex((s) => s.id === id);
+    if (i < 0 || this.readonly) return;
+    const copy = structuredClone($state.snapshot(this.wb.sheets[i])) as Sheet;
+    copy.id = uid();
+    copy.name = `${copy.name} copy`;
+    for (const t of copy.tables) t.id = uid();
+    this.change(() => this.wb.sheets.splice(i + 1, 0, copy));
+    this.setSheet(copy.id);
   }
 
   moveSheet(id: string, dir: -1 | 1) {

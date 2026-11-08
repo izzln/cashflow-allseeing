@@ -26,6 +26,10 @@
     return { w: w + 400, h: h + 400 };
   });
 
+  $effect(() => {
+    if (maxTable) canvasEl?.scrollTo(0, 0);
+  });
+
   onMount(() => {
     app.contentEl = contentEl;
     app.editorEl = editorEl;
@@ -142,6 +146,8 @@
   .zoomer.filled {
     position: absolute;
     inset: 0;
+    /* The filled table scrolls inside itself; nothing (e.g. the parked cell editor) may scroll the canvas. */
+    overflow: clip;
   }
   .overlay {
     position: absolute;

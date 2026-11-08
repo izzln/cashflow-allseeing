@@ -3,10 +3,13 @@
   import { app } from '../lib/store.svelte';
   import { cellsInRanges, type Pos } from '../lib/grid';
   import type { Table } from '../lib/model';
+  import TableTabs from './TableTabs.svelte';
 
   let { table, children, maximized = false }: { table: Table; children: Snippet; maximized?: boolean } = $props();
   let frameEl = $state<HTMLElement | null>(null);
   let bodyWidth = $state(0);
+  let bodyEl = $state<HTMLElement | null>(null);
+  let pinsEl = $state<HTMLElement | null>(null);
   $effect(() => {
     if (maximized) app.fillWidth = bodyWidth;
   });
@@ -279,6 +282,7 @@
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
     class="body"
+    bind:this={bodyEl}
     bind:clientWidth={bodyWidth}
     style="--row-h:28px"
     class:has-sel={!!sel}
@@ -293,6 +297,12 @@
   >
     {@render children()}
   </div>
+  {#if maximized}
+    <!-- Fill Window: row and column tabs in a fixed gutter, following the body's scroll. -->
+    <div class="pins" bind:this={pinsEl}>
+      {#if pinsEl && bodyEl}<TableTabs {table} layer={pinsEl} pinned scroller={bodyEl} />{/if}
+    </div>
+  {/if}
 </div>
 </div>
 
@@ -313,6 +323,11 @@
   }
   .frame.max .body {
     flex: 1;
+    min-height: 0;
+    /* Room for the pinned row and column tabs. */
+    margin: calc(var(--col-tab) + 6px) 0 0 calc(var(--row-tab) + 6px);
+    border-top: 1px solid var(--line);
+    border-left: 1px solid var(--line);
     overflow: auto;
     -webkit-overflow-scrolling: touch;
   }
@@ -344,6 +359,25 @@
   .frame.max .body :global(thead th:first-child) {
     left: 0;
     z-index: 3;
+  }
+  .frame {
+    --row-tab: 20px;
+    --col-tab: 15px;
+  }
+  @media (pointer: coarse) {
+    .frame {
+      --row-tab: 30px;
+      --col-tab: 23px;
+    }
+  }
+  .pins {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    overflow: hidden;
+  }
+  .pins :global(*) {
+    pointer-events: auto;
   }
   .grow {
     flex: 1;
