@@ -52,10 +52,21 @@
       const g = e as Event & { scale: number; clientX: number; clientY: number };
       void app.setZoom(base * g.scale, { x: g.clientX, y: g.clientY });
     };
+    // Size changes keep the person's place: the selection stays in view, the editor on its cell.
+    let first = true;
+    let raf = 0;
+    const ro = new ResizeObserver(() => {
+      if (first) return void (first = false);
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => app.keepPlace());
+    });
+    ro.observe(canvasEl);
     canvasEl.addEventListener('wheel', onWheel, { passive: false });
     canvasEl.addEventListener('gesturestart', onGestureStart);
     canvasEl.addEventListener('gesturechange', onGestureChange);
     return () => {
+      ro.disconnect();
+      cancelAnimationFrame(raf);
       canvasEl.removeEventListener('wheel', onWheel);
       canvasEl.removeEventListener('gesturestart', onGestureStart);
       canvasEl.removeEventListener('gesturechange', onGestureChange);

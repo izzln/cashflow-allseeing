@@ -118,6 +118,7 @@
     app.months;
     app.zoom;
     app.fillWidth;
+    app.layoutTick;
     bodyCount;
     table.x;
     table.y;
@@ -170,6 +171,8 @@
     to: number;
     marker: number;
     pointer: string;
+    /** Touch: the line was already selected (and its menu shut): this tap shows the edit menu. */
+    showMenu: boolean;
   } | null>(null);
 
   /** Right-click on a tab: select that row/column (unless already selected) and show its menu. */
@@ -186,21 +189,23 @@
     e.preventDefault();
     e.stopPropagation();
     app.commitEdit();
+    const showMenu = wholeLines(axis).includes(i) && !e.shiftKey && app.menuClosedAt !== e.timeStamp;
     app.menu = null;
     let lines = wholeLines(axis);
     if (!lines.includes(i) || e.shiftKey) {
       app.selectLines(table.id, axis, i, i, e.shiftKey);
       lines = wholeLines(axis);
     }
-    const draggable = !app.readonly && (axis === 'row' ? lines.every((r) => r < bodyCount) : canDragCols);
-    if (!draggable) return;
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    drag = { axis, lines, x: e.clientX, y: e.clientY, moved: false, outside: false, to: -1, marker: -1, pointer: e.pointerType };
+    const draggable = !app.readonly && (axis === 'row' ? lines.every((r) => r < bodyCount) : canDragCols);
+    // A line that can't move still takes the press, so a second tap shows its menu.
+    drag = { axis, lines: draggable ? lines : [], x: e.clientX, y: e.clientY, moved: false, outside: false, to: -1, marker: -1, pointer: e.pointerType, showMenu };
   }
 
   function move(e: PointerEvent) {
     const frame = frameEl();
     if (!drag || !frame) return;
+    if (!drag.lines.length) return;
     if (!drag.moved && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 5) return;
     drag.moved = true;
     drag.x = e.clientX;
@@ -263,7 +268,8 @@
     drag = null;
     if (!d) return;
     if (!d.moved) {
-      if (d.pointer === 'touch') {
+      // Touch, as in Numbers: the first tap selects the line; a tap on the selected line shows its menu.
+      if (d.pointer === 'touch' && d.showMenu) {
         const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
         app.menu = { kind: 'edit', target: d.axis === 'row' ? 'rows' : 'columns', tableId: table.id, x: r.left + r.width / 2, y: r.top };
       }

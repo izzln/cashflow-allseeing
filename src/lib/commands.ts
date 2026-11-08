@@ -81,9 +81,36 @@ function lineCount(axis: 'row' | 'col'): number {
   return set.size;
 }
 
+/**
+ * The classic copy command, run inside the tap or click. Safari (iPad above all) is strict about
+ * the async Clipboard API, but lets a user gesture run "copy" when the page answers the copy
+ * event itself (see onBeforeClipboard in App). Returns false when the browser didn't run it.
+ */
+function execCopy(data: { text: string; html: string }): boolean {
+  let done = false;
+  const onCopy = (e: ClipboardEvent) => {
+    if (!e.clipboardData) return;
+    e.clipboardData.setData('text/plain', data.text);
+    e.clipboardData.setData('text/html', data.html);
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    done = true;
+  };
+  document.addEventListener('copy', onCopy, true);
+  try {
+    document.execCommand('copy');
+  } catch {
+    // Not supported: fall back to the Clipboard API.
+  } finally {
+    document.removeEventListener('copy', onCopy, true);
+  }
+  return done;
+}
+
 async function writeClipboard(): Promise<boolean> {
   const data = app.copyData();
   if (!data) return false;
+  if (execCopy(data)) return true;
   try {
     if ('ClipboardItem' in window) {
       await navigator.clipboard.write([

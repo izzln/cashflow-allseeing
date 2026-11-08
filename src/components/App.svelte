@@ -14,6 +14,7 @@
   import { commandForKey, commands, isEnabled } from '../lib/commands';
   import { fileStore } from '../lib/files';
   import { session } from '../lib/session.svelte';
+  import { formatsFromHTML } from '../lib/clipboard';
 
   /**
    * Each window shows its file in the address: #/f/<id>, or #/f/<id>/s/<snapshotId>
@@ -132,11 +133,62 @@
     const text = e.clipboardData?.getData('text/plain');
     if (!text) return;
     e.preventDefault();
-    app.paste(text);
+    app.paste(text, formatsFromHTML(e.clipboardData?.getData('text/html') ?? ''));
   }
+
+  /**
+   * Safari (Mac and iPad) only offers Copy, Cut and Paste, and only fires their events, when it
+   * sees something to copy: a text selection or a focused field. A grid selection is neither, so
+   * cancelling these "before" events tells it the page handles the clipboard itself.
+   */
+  function onBeforeClipboard(e: Event) {
+    if (view === 'file' && !inField(e) && app.selection && !document.getSelection()?.toString()) e.preventDefault();
+  }
+
+  /**
+   * Focus follows the pointer, not Tab (Stories: Input model). Tab moves only between the text
+   * fields of the panel, menu or dialog it is pressed in (the cell editor and the grid handle it
+   * themselves); it never lands on buttons.
+   */
+  const FIELD = 'input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="range"]), select, textarea';
+  function onTab(e: KeyboardEvent) {
+    if (e.key !== 'Tab' || e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
+    e.preventDefault();
+    const el = document.activeElement as HTMLElement | null;
+    if (!el?.matches(FIELD)) return;
+    const scope = el.closest('[role="dialog"], [role="menu"], .inspector, .login, .home') ?? document.body;
+    const fields = [...scope.querySelectorAll<HTMLElement>(FIELD)].filter(
+      (f) => !(f as HTMLInputElement).disabled && !f.classList.contains('editor') && f.getClientRects().length > 0,
+    );
+    const i = fields.indexOf(el);
+    if (fields.length < 2 || i < 0) return;
+    fields[(i + (e.shiftKey ? -1 : 1) + fields.length) % fields.length].focus();
+  }
+
+  // A size change that crosses a size class closes menus (cheap to reopen; Stories: Adapting).
+  let lastClass = app.sizeClass;
+  $effect(() => {
+    const c = app.sizeClass;
+    if (c !== lastClass) {
+      lastClass = c;
+      app.menu = null;
+    }
+  });
 
   onMount(() => {
     const flush = () => app.flush();
+    // Measure the app's container, not the device.
+    const ro = new ResizeObserver(() => (app.width = document.documentElement.clientWidth));
+    ro.observe(document.documentElement);
+    // The software keyboard: inset by what it covers, so sheets and the status bubble stay above it.
+    const vv = window.visualViewport;
+    const onViewport = () => {
+      const covered = vv ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop) : 0;
+      document.documentElement.style.setProperty('--kb-inset', `${Math.round(covered)}px`);
+    };
+    vv?.addEventListener('resize', onViewport);
+    vv?.addEventListener('scroll', onViewport);
+    window.addEventListener('keydown', onTab);
     const refresh = () => app.refreshMonths();
     let unwatch = () => {};
     // Unsaved edits that the server hasn't confirmed: ask before closing the window.
@@ -157,6 +209,8 @@
     });
     window.addEventListener('hashchange', route);
     window.addEventListener('beforeunload', onBeforeUnload);
+    // Non-standard WebKit events (no Svelte attribute for them).
+    for (const t of ['beforecopy', 'beforecut', 'beforepaste']) document.addEventListener(t, onBeforeClipboard);
     window.addEventListener('pagehide', flush);
     window.addEventListener('focus', refresh);
     document.addEventListener('visibilitychange', () => {
@@ -164,9 +218,14 @@
       else refresh();
     });
     return () => {
+      ro.disconnect();
+      vv?.removeEventListener('resize', onViewport);
+      vv?.removeEventListener('scroll', onViewport);
+      window.removeEventListener('keydown', onTab);
       unwatch();
       window.removeEventListener('hashchange', route);
       window.removeEventListener('beforeunload', onBeforeUnload);
+      for (const t of ['beforecopy', 'beforecut', 'beforepaste']) document.removeEventListener(t, onBeforeClipboard);
       window.removeEventListener('pagehide', flush);
       window.removeEventListener('focus', refresh);
     };
@@ -234,5 +293,6 @@
     flex: 1;
     display: flex;
     min-height: 0;
+    position: relative;
   }
 </style>

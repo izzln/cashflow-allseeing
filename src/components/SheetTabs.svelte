@@ -5,7 +5,7 @@
   /**
    * Sheet tabs. Click selects; clicking the active tab again (or double-click) renames it in place.
    * Drag a tab to reorder (mouse, or press-and-drag on touch); right-click or long-press opens the
-   * sheet menu (Rename, Duplicate, Move Left/Right, Delete), also reachable with Shift+F10 / the menu key.
+   * sheet menu (Rename, Duplicate, Move Left/Right, Delete). Tabs are not Tab stops (Stories: Tabs).
    */
   let draft = $state('');
   let inputEl = $state<HTMLInputElement | null>(null);
@@ -95,17 +95,12 @@
     }
   }
 
-  function onKey(e: KeyboardEvent, id: string) {
-    if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) {
-      e.preventDefault();
-      const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-      openMenu(id, r.left, r.bottom);
-    } else if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      if (app.activeSheetId === id) startRename(id);
-      else app.setSheet(id);
-    }
-  }
+  // The active tab stays in view when the row scrolls sideways (Stories: Responsive layout).
+  $effect(() => {
+    const id = app.activeSheetId;
+    void app.width;
+    navEl?.querySelector<HTMLElement>(`.tab[data-sheet="${id}"]`)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  });
 </script>
 
 <nav class="tabs" bind:this={navEl} aria-label="Sheets">
@@ -142,7 +137,7 @@
             drag = null;
             openMenu(s.id, e.clientX, e.clientY);
           }}
-          onkeydown={(e) => onKey(e, s.id)}
+          tabindex="-1"
         >{s.name}</button>
       {/if}
     </div>

@@ -2,6 +2,7 @@
   import { app } from '../lib/store.svelte';
   import { formatSize } from '../lib/attachments';
   import Icon from './Icon.svelte';
+  import { fadeOut } from '../lib/motion';
 
   const target = $derived(app.filesCell);
   const table = $derived(target ? app.table(target.tableId) : undefined);
@@ -19,9 +20,10 @@
     const entryIndex = table?.kind === 'table' ? table.entries.findIndex((e) => e.id === target.rowId) : -1;
     const col = table?.kind === 'table' ? table.columns.findIndex((c) => c.id === target.colId) : -1;
     const el = rows.find((td) => td.dataset.r === String(entryIndex) && td.dataset.c === String(col)) ?? cell;
-    if (!el || window.innerWidth < 600) return '';
+    if (!el || app.sizeClass === 'compact') return '';
     const r = el.getBoundingClientRect();
     const left = Math.max(8, Math.min(r.left, window.innerWidth - 348));
+    void app.width;
     const top = r.bottom + 300 > window.innerHeight ? Math.max(8, r.top - 300) : r.bottom + 4;
     return `left:${left}px;top:${top}px`;
   });
@@ -44,6 +46,9 @@
   <div
     class="pop"
     class:sheet={!place}
+    class:anim-pop={!!place}
+    class:from-left={!!place}
+    out:fadeOut
     class:over
     style={place}
     role="dialog"
@@ -105,7 +110,7 @@
   .pop {
     position: fixed;
     z-index: var(--z-popover);
-    width: 340px;
+    width: var(--popover-w);
     max-height: 300px;
     display: flex;
     flex-direction: column;
@@ -118,9 +123,16 @@
   .pop.sheet {
     left: 8px;
     right: 8px;
-    bottom: calc(8px + env(safe-area-inset-bottom));
+    bottom: calc(8px + env(safe-area-inset-bottom) + var(--kb-inset));
     width: auto;
     max-height: 60vh;
+    max-height: 60dvh;
+    animation: cf-slide-up var(--motion-panel) var(--ease-enter);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .pop.sheet {
+      animation-name: cf-fade-in;
+    }
   }
   .pop.over {
     outline: 3px dashed var(--accent);

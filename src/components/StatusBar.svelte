@@ -2,12 +2,14 @@
   import { app } from '../lib/store.svelte';
   import { formatNumber } from '../lib/format';
   import { selectionStats } from '../lib/grid';
+  import { fadeOut } from '../lib/motion';
 
   const stats = $derived(selectionStats(app.selectedValues()));
 </script>
 
 {#if app.notice || stats.count > 0}
-  <div class="status" role="status">
+  <!-- Fades in once; a newer notice replaces the text without replaying (Stories: Motion). -->
+  <div class="status anim-fade" role="status" out:fadeOut>
     {#if app.notice}
       <span class="notice" class:info={app.noticeTone === 'info'}>{app.notice}</span>
       {#if app.noticeAction}
@@ -24,8 +26,10 @@
 <style>
   .status {
     position: fixed;
-    right: 16px;
-    bottom: calc(16px + env(safe-area-inset-bottom));
+    right: calc(16px + env(safe-area-inset-right));
+    bottom: calc(16px + env(safe-area-inset-bottom) + var(--kb-inset));
+    max-width: calc(100vw - 32px);
+    flex-wrap: wrap;
     display: flex;
     gap: 14px;
     padding: 8px 14px;
