@@ -1,13 +1,30 @@
 import { currentMonth, isMonthKey, type MonthKey } from './months';
 
-/** Where a cash-flow row takes its numbers from: the sum of matching ledger entries per month. */
+/** Only ledger entries that pass every filter count. */
+export interface Filter {
+  /** Ledger column id. */
+  col: string;
+  /** in: the cell equals one of `values` (text columns); contains: includes `text`; checked/unchecked: checkbox columns. */
+  op: 'in' | 'contains' | 'checked' | 'unchecked';
+  values: string[];
+  text: string;
+}
+
+/** A whole cash-flow row from a ledger: each month = sum of the amount column for entries dated in that month. */
 export interface RowSource {
   ledgerId: string;
-  /** Only entries in these categories; empty = all. */
-  categories: string[];
-  /** Only entries whose note contains this text (case-insensitive); empty = no filter. */
-  noteContains: string;
+  dateCol: string;
+  amountCol: string;
+  filters: Filter[];
   /** Multiply by −1 (e.g. a ledger that records payments as positive numbers). */
+  flip: boolean;
+}
+
+/** One cash-flow cell from a ledger: the total of one number column over the matching entries (any date). */
+export interface CellSource {
+  ledgerId: string;
+  col: string;
+  filters: Filter[];
   flip: boolean;
 }
 
@@ -45,6 +62,8 @@ interface TableBase {
 /** A month-by-month cash-flow table. */
 export interface CashTable extends TableBase {
   kind: 'cashflow';
+  /** Cells that show a ledger column total, keyed by `${rowId}|${month}`. */
+  cellSources: Record<string, CellSource>;
   /** Balance at the start of openingMonth, before that month's cash flow. */
   openingBalance: number;
   openingMonth: MonthKey;
@@ -52,34 +71,47 @@ export interface CashTable extends TableBase {
   footers: FooterRow[];
 }
 
-/** One dated amount in a ledger. */
-export interface Entry {
+export type ColumnType = 'date' | 'number' | 'text' | 'checkbox' | 'files';
+
+export interface LedgerColumn {
   id: string;
-  /** 'YYYY-MM-DD', or '' while not filled in. */
-  date: string;
-  amount: number | null;
-  category: string;
-  note: string;
+  name: string;
+  type: ColumnType;
 }
 
-/** How a CSV/Excel file maps onto ledger columns; saved so re-imports are one click. */
+/** A file attached to a ledger cell; the bytes are stored separately (see attachments). */
+export interface Attachment {
+  id: string;
+  name: string;
+  size: number;
+  type: string;
+}
+
+/** date: 'YYYY-MM-DD'; number; text; checkbox: boolean; files: list. A missing key is an empty cell. */
+export type CellData = string | number | boolean | Attachment[];
+
+/** One row of a ledger. */
+export interface Entry {
+  id: string;
+  cells: Record<string, CellData>;
+}
+
+/** How a CSV/Excel file maps onto ledger columns; saved so re-imports are one step. */
 export interface ImportMap {
   hasHeader: boolean;
-  /** Column per field: a header name when hasHeader, else a 0-based index as a string. */
-  date: string;
-  amount: string;
-  /** Alternative to amount: separate income and expense columns (amount = income − expense). */
-  income: string;
-  expense: string;
-  category: string;
-  note: string;
-  flip: boolean;
   sheet: string;
+  /** Ledger column id → file column (a header name when hasHeader, else a 0-based index as text). */
+  cols: Record<string, string>;
+  /** Fill one number column from separate money-in and money-out file columns (in − out). */
+  split: { col: string; income: string; expense: string } | null;
+  /** Multiply imported numbers by −1. */
+  flip: boolean;
 }
 
 /** A list of dated amounts (entered by hand or imported) that cash-flow rows can draw on. */
 export interface LedgerTable extends TableBase {
   kind: 'ledger';
+  columns: LedgerColumn[];
   entries: Entry[];
   importMap?: ImportMap;
   /** Name of the last imported file, for the "re-import" hint. */
@@ -117,7 +149,17 @@ export function newRow(label = ''): Row {
 }
 
 export function newEntry(): Entry {
-  return { id: uid(), date: '', amount: null, category: '', note: '' };
+  return { id: uid(), cells: {} };
+}
+
+/** The columns a new ledger starts with. Fixed ids keep imports and sources simple. */
+export function defaultColumns(): LedgerColumn[] {
+  return [
+    { id: 'date', name: 'Date', type: 'date' },
+    { id: 'amount', name: 'Amount', type: 'number' },
+    { id: 'category', name: 'Category', type: 'text' },
+    { id: 'note', name: 'Note', type: 'text' },
+  ];
 }
 
 export function newTable(name: string, x = GRID * 2, y = GRID * 2): CashTable {
@@ -131,6 +173,7 @@ export function newTable(name: string, x = GRID * 2, y = GRID * 2): CashTable {
     openingMonth: currentMonth(),
     rows: ['', '', '', ''].map(() => newRow()),
     footers: [],
+    cellSources: {},
     styles: {},
   };
 }
@@ -142,6 +185,7 @@ export function newLedger(name: string, x = GRID * 2, y = GRID * 2): LedgerTable
     name,
     x,
     y,
+    columns: defaultColumns(),
     entries: [0, 1, 2].map(() => newEntry()),
     styles: {},
   };
@@ -178,14 +222,36 @@ function normStyles(v: unknown): Record<string, string> {
   ) as Record<string, string>;
 }
 
+function normFilters(v: unknown): Filter[] {
+  return arr(v)
+    .filter((f) => f && typeof f.col === 'string')
+    .map((f) => ({
+      col: f.col,
+      op: ['in', 'contains', 'checked', 'unchecked'].includes(f.op) ? f.op : 'in',
+      values: arr(f.values).map((x) => str(x)),
+      text: str(f.text),
+    }));
+}
+
 function normSource(s: any): RowSource | undefined {
   if (!s || typeof s !== 'object' || typeof s.ledgerId !== 'string') return undefined;
+  const filters = normFilters(s.filters);
+  // Earlier versions had fixed category / note filters.
+  const cats = arr(s.categories).map((c) => str(c)).filter(Boolean);
+  if (cats.length) filters.push({ col: 'category', op: 'in', values: cats, text: '' });
+  if (str(s.noteContains)) filters.push({ col: 'note', op: 'contains', values: [], text: str(s.noteContains) });
   return {
     ledgerId: s.ledgerId,
-    categories: arr(s.categories).map((c) => str(c)),
-    noteContains: str(s.noteContains),
+    dateCol: str(s.dateCol, 'date') || 'date',
+    amountCol: str(s.amountCol, 'amount') || 'amount',
+    filters,
     flip: !!s.flip,
   };
+}
+
+function normCellSource(s: any): CellSource | undefined {
+  if (!s || typeof s !== 'object' || typeof s.ledgerId !== 'string') return undefined;
+  return { ledgerId: s.ledgerId, col: str(s.col, 'amount') || 'amount', filters: normFilters(s.filters), flip: !!s.flip };
 }
 
 function normRow(r: any): Row {
@@ -206,17 +272,59 @@ function normRow(r: any): Row {
 
 function normImportMap(m: any): ImportMap | undefined {
   if (!m || typeof m !== 'object') return undefined;
-  return {
-    hasHeader: m.hasHeader !== false,
-    date: str(m.date),
-    amount: str(m.amount),
-    income: str(m.income),
-    expense: str(m.expense),
-    category: str(m.category),
-    note: str(m.note),
-    flip: !!m.flip,
-    sheet: str(m.sheet),
-  };
+  const cols: Record<string, string> = {};
+  let split: ImportMap['split'] = null;
+  if (m.cols && typeof m.cols === 'object') {
+    for (const [k, v] of Object.entries(m.cols)) if (typeof v === 'string' && v) cols[k] = v;
+    if (m.split && typeof m.split.col === 'string') {
+      split = { col: m.split.col, income: str(m.split.income), expense: str(m.split.expense) };
+    }
+  } else {
+    // Earlier versions mapped fixed fields.
+    for (const k of ['date', 'amount', 'category', 'note']) if (str(m[k])) cols[k] = str(m[k]);
+    if (str(m.income) || str(m.expense)) split = { col: 'amount', income: str(m.income), expense: str(m.expense) };
+  }
+  return { hasHeader: m.hasHeader !== false, sheet: str(m.sheet), cols, split, flip: !!m.flip };
+}
+
+const COLUMN_TYPES = ['date', 'number', 'text', 'checkbox', 'files'];
+
+function normColumns(v: unknown): LedgerColumn[] {
+  const seen = new Set<string>();
+  const cols = arr(v)
+    .filter((c) => c && typeof c.id === 'string' && !seen.has(c.id) && seen.add(c.id))
+    .map((c) => ({ id: c.id, name: str(c.name), type: (COLUMN_TYPES.includes(c.type) ? c.type : 'text') as ColumnType }));
+  return cols.length ? cols : defaultColumns();
+}
+
+function normCell(type: ColumnType, v: unknown): CellData | undefined {
+  switch (type) {
+    case 'date':
+      return typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : undefined;
+    case 'number':
+      return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+    case 'checkbox':
+      return v === true ? true : undefined;
+    case 'files':
+      return Array.isArray(v) && v.length
+        ? v
+            .filter((a) => a && typeof a.id === 'string')
+            .map((a) => ({ id: a.id, name: str(a.name, 'file'), size: num(a.size), type: str(a.type) }))
+        : undefined;
+    default:
+      return typeof v === 'string' && v !== '' ? v : undefined;
+  }
+}
+
+function normEntry(e: any, columns: LedgerColumn[]): Entry {
+  // Earlier versions stored date / amount / category / note directly on the entry.
+  const raw = e?.cells && typeof e.cells === 'object' ? e.cells : { date: e?.date, amount: e?.amount, category: e?.category, note: e?.note };
+  const cells: Record<string, CellData> = {};
+  for (const c of columns) {
+    const v = normCell(c.type, raw[c.id]);
+    if (v !== undefined) cells[c.id] = v;
+  }
+  return { id: str(e?.id) || uid(), cells };
 }
 
 function normTable(t: any): Table {
@@ -228,16 +336,12 @@ function normTable(t: any): Table {
     styles: normStyles(t?.styles),
   };
   if (t?.kind === 'ledger') {
+    const columns = normColumns(t.columns);
     const l: LedgerTable = {
       ...base,
       kind: 'ledger',
-      entries: arr(t.entries).map((e) => ({
-        id: str(e?.id) || uid(),
-        date: /^\d{4}-\d{2}-\d{2}$/.test(e?.date) ? e.date : '',
-        amount: typeof e?.amount === 'number' && Number.isFinite(e.amount) ? e.amount : null,
-        category: str(e?.category),
-        note: str(e?.note),
-      })),
+      columns,
+      entries: arr(t.entries).map((e) => normEntry(e, columns)),
     };
     const im = normImportMap(t.importMap);
     if (im) l.importMap = im;
@@ -255,6 +359,11 @@ function normTable(t: any): Table {
       label: str(f?.label),
       formula: str(f?.formula),
     })),
+    cellSources: Object.fromEntries(
+      Object.entries((t?.cellSources as object) ?? {})
+        .map(([k, v]) => [k, normCellSource(v)] as const)
+        .filter(([k, v]) => /^[^|]+\|\d{4}-\d{2}$/.test(k) && v),
+    ) as Record<string, CellSource>,
   };
 }
 

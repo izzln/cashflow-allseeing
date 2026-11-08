@@ -1,5 +1,6 @@
 import { evaluate, FormulaError, parseFormula, type Node } from './formula';
-import type { CashTable, FooterRow, LedgerTable, Row, RowSource, Workbook } from './model';
+import { matchesFilters } from './ledger';
+import type { CashTable, CellSource, FooterRow, LedgerTable, Row, RowSource, Workbook } from './model';
 import { addMonths, type MonthKey } from './months';
 
 /** What a cell shows: a number, empty, or an error message. */
@@ -65,6 +66,11 @@ export class Evaluator {
     return this.safe(() => this.sourceNum(source, m));
   }
 
+  /** The total a cell source shows. */
+  cellSourceValue(source: CellSource): CellValue {
+    return this.safe(() => this.cellSourceNum(source));
+  }
+
   /** Check a formula without evaluating it; returns an error message or null. */
   check(formula: string): string | null {
     const p = this.parse(formula);
@@ -103,6 +109,8 @@ export class Evaluator {
   private rowNum(t: CashTable, row: Row, m: MonthKey): number | null {
     return this.cached(`${t.id}|${row.id}|${m}`, () => {
       if (row.formula !== undefined) return this.formulaNum(t, row.id, row.formula, m);
+      const cell = t.cellSources[`${row.id}|${m}`];
+      if (cell) return this.cellSourceNum(cell);
       const manual = row.values[m];
       if (row.source) return manual !== undefined ? manual : this.sourceNum(row.source, m);
       return manual ?? null;
@@ -189,21 +197,28 @@ export class Evaluator {
     throw new FormulaError(`No row named "${label}"${tableName ? ` in "${t.name}"` : ''}`);
   }
 
+  private ledger(id: string): LedgerTable {
+    const l = this.ledgers.get(id);
+    if (!l) throw new FormulaError('The source ledger was deleted');
+    return l;
+  }
+
   private sums(source: RowSource): Map<MonthKey, number> {
     const key = JSON.stringify(source);
     let map = this.ledgerSums.get(key);
     if (map) return map;
-    const ledger = this.ledgers.get(source.ledgerId);
-    if (!ledger) throw new FormulaError('The source ledger was deleted');
-    const cats = new Set(source.categories.map(norm));
-    const note = norm(source.noteContains);
+    const ledger = this.ledger(source.ledgerId);
+    const date = ledger.columns.find((c) => c.id === source.dateCol && c.type === 'date');
+    const amount = ledger.columns.find((c) => c.id === source.amountCol && c.type === 'number');
+    if (!date) throw new FormulaError('Choose a date column for this row');
+    if (!amount) throw new FormulaError('Choose a number column for this row');
     map = new Map();
     for (const e of ledger.entries) {
-      if (!e.date || e.amount === null) continue;
-      if (cats.size && !cats.has(norm(e.category))) continue;
-      if (note && !e.note.toLowerCase().includes(note)) continue;
-      const k = e.date.slice(0, 7);
-      map.set(k, (map.get(k) ?? 0) + (source.flip ? -e.amount : e.amount));
+      const d = e.cells[date.id];
+      const v = e.cells[amount.id];
+      if (typeof d !== 'string' || typeof v !== 'number' || !matchesFilters(e, source.filters)) continue;
+      const k = d.slice(0, 7);
+      map.set(k, (map.get(k) ?? 0) + (source.flip ? -v : v));
     }
     this.ledgerSums.set(key, map);
     return map;
@@ -213,5 +228,20 @@ export class Evaluator {
     const v = this.sums(source).get(m);
     // Round away floating-point noise from summing many decimals.
     return v === undefined ? null : Math.round(v * 100) / 100;
+  }
+
+  private cellSourceNum(source: CellSource): number | null {
+    const ledger = this.ledger(source.ledgerId);
+    const col = ledger.columns.find((c) => c.id === source.col && c.type === 'number');
+    if (!col) throw new FormulaError('Choose a number column for this cell');
+    let sum = 0;
+    let any = false;
+    for (const e of ledger.entries) {
+      const v = e.cells[col.id];
+      if (typeof v !== 'number' || !matchesFilters(e, source.filters)) continue;
+      sum += source.flip ? -v : v;
+      any = true;
+    }
+    return any ? Math.round(sum * 100) / 100 : null;
   }
 }

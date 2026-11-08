@@ -52,6 +52,10 @@ interface SnapRow {
 const MAX_CONTENT = 1_900_000;
 const META = 'id, name, created_at, created_month, updated_at, rev, month_end_done, snap_rev';
 const MAX_FAILURES = 10;
+const MAX_ATTACHMENT = 25 * 1024 * 1024;
+const CHUNK = 1_900_000;
+/** Types a browser may show inline; anything else downloads, so an uploaded page can't run in our origin. */
+const INLINE_TYPES = /^(image\/(png|jpeg|gif|webp|heic|heif)|application\/pdf|text\/plain)$/;
 const FAILURE_WINDOW = 15 * 60_000;
 
 class HttpError extends Error {
@@ -140,7 +144,7 @@ function snapshotStatements(db: D1Database, id: string, rev: number, label: stri
 
 // ---------- routes ----------
 
-async function api(req: Request, env: Env, path: string[]): Promise<Response> {
+async function api(req: Request, env: Env, path: string[], url: URL): Promise<Response> {
   const db = env.DB;
   const method = req.method;
   const now = Date.now();
@@ -258,6 +262,8 @@ async function api(req: Request, env: Env, path: string[]): Promise<Response> {
     if (method === 'DELETE') {
       await db.batch([
         db.prepare('DELETE FROM snapshots WHERE file_id = ?').bind(id),
+        db.prepare('DELETE FROM attachment_chunks WHERE file_id = ?').bind(id),
+        db.prepare('DELETE FROM attachments WHERE file_id = ?').bind(id),
         db.prepare('DELETE FROM files WHERE id = ?').bind(id),
       ]);
       return json({ ok: true });
@@ -282,6 +288,19 @@ async function api(req: Request, env: Env, path: string[]): Promise<Response> {
            SELECT lower(hex(randomblob(7))), ?, label, kind, as_of, taken_at, content FROM snapshots WHERE file_id = ?`,
         )
         .bind(copy, src.id),
+      // The copy's cells point at the same attachment ids, so copy the files too.
+      db
+        .prepare(
+          `INSERT INTO attachments (file_id, id, name, type, size, chunks, created_at)
+           SELECT ?, id, name, type, size, chunks, created_at FROM attachments WHERE file_id = ?`,
+        )
+        .bind(copy, src.id),
+      db
+        .prepare(
+          `INSERT INTO attachment_chunks (file_id, attachment_id, seq, data)
+           SELECT ?, attachment_id, seq, data FROM attachment_chunks WHERE file_id = ?`,
+        )
+        .bind(copy, src.id),
     ]);
     return json(meta(await getFile(db, copy)), 201);
   }
@@ -298,6 +317,72 @@ async function api(req: Request, env: Env, path: string[]): Promise<Response> {
       .bind(id, 'month-end', due)
       .first<SnapRow>();
     return json({ snapshot: snap ? snapMeta(snap) : null });
+  }
+
+  // /api/files/:id/attachments[/:aid]
+  if (sub === 'attachments') {
+    if (!sid && method === 'POST') {
+      await getFile(db, id);
+      const rawName = req.headers.get('X-File-Name') ?? 'file';
+      let fileName = 'file';
+      try {
+        fileName = decodeURIComponent(rawName).replace(/[\u0000-\u001f/\\]/g, '_').slice(0, 200) || 'file';
+      } catch {
+        // keep the default
+      }
+      const type = (req.headers.get('Content-Type') ?? 'application/octet-stream').split(';')[0].trim().slice(0, 100);
+      const bytes = new Uint8Array(await req.arrayBuffer());
+      if (bytes.length === 0) throw new HttpError(400, 'The file is empty.');
+      if (bytes.length > MAX_ATTACHMENT) throw new HttpError(413, 'Files can be at most 25 MB.');
+      const aid = newId();
+      const chunks = Math.ceil(bytes.length / CHUNK);
+      const stmts = [
+        db
+          .prepare('INSERT INTO attachments (file_id, id, name, type, size, chunks, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+          .bind(id, aid, fileName, type, bytes.length, chunks, now),
+      ];
+      for (let i = 0; i < chunks; i++) {
+        stmts.push(
+          db
+            .prepare('INSERT INTO attachment_chunks (file_id, attachment_id, seq, data) VALUES (?, ?, ?, ?)')
+            .bind(id, aid, i, bytes.slice(i * CHUNK, (i + 1) * CHUNK).buffer),
+        );
+      }
+      await db.batch(stmts);
+      return json({ id: aid, name: fileName, size: bytes.length, type }, 201);
+    }
+    if (sid && method === 'GET') {
+      const a = await db
+        .prepare('SELECT name, type, size, chunks FROM attachments WHERE file_id = ? AND id = ?')
+        .bind(id, sid)
+        .first<{ name: string; type: string; size: number; chunks: number }>();
+      if (!a) throw new HttpError(404, 'Attachment not found');
+      const out = new Uint8Array(a.size);
+      let at = 0;
+      // One chunk per query keeps each result small.
+      for (let i = 0; i < a.chunks; i++) {
+        const row = await db
+          .prepare('SELECT data FROM attachment_chunks WHERE file_id = ? AND attachment_id = ? AND seq = ?')
+          .bind(id, sid, i)
+          .first<{ data: ArrayBuffer | number[] }>();
+        if (!row) throw new HttpError(500, 'Attachment is incomplete');
+        const part = row.data instanceof ArrayBuffer ? new Uint8Array(row.data) : Uint8Array.from(row.data);
+        out.set(part, at);
+        at += part.length;
+      }
+      const inline = INLINE_TYPES.test(a.type) && url.searchParams.get('download') === null;
+      const encoded = encodeURIComponent(a.name);
+      return new Response(out, {
+        headers: {
+          'Content-Type': inline ? a.type : 'application/octet-stream',
+          'Content-Disposition': `${inline ? 'inline' : 'attachment'}; filename="${encoded}"; filename*=UTF-8''${encoded}`,
+          'Content-Security-Policy': "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'",
+          'X-Content-Type-Options': 'nosniff',
+          'Cache-Control': 'private, max-age=31536000, immutable',
+        },
+      });
+    }
+    throw new HttpError(405, 'Method not allowed');
   }
 
   // /api/files/:id/snapshots[/:sid]
@@ -347,7 +432,7 @@ export default {
     if (!url.pathname.startsWith('/api/')) return serveStatic(req, url.pathname);
     const path = url.pathname.slice(5).split('/').filter(Boolean).map(decodeURIComponent);
     try {
-      return await api(req, env, path);
+      return await api(req, env, path, url);
     } catch (e) {
       if (e instanceof HttpError) return json({ error: e.message, ...(e.body as object) }, e.status);
       console.error(e);

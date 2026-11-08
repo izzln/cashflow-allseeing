@@ -2,13 +2,22 @@
   import { app, rowKind, type RowKind } from '../lib/store.svelte';
   import { isErr } from '../lib/evaluate';
   import { formatNumber, parseNumber } from '../lib/format';
-  import { readSpreadsheet, type SheetData } from '../lib/import/xlsx';
   import type { LedgerTable } from '../lib/model';
   import { addMonths, currentMonth, monthLabel, monthRange, parseMonth } from '../lib/months';
-  import ImportDialog from './ImportDialog.svelte';
+  import { pickImportFile } from '../lib/commands';
+  import SourcePicker from './SourcePicker.svelte';
+  import { COLUMN_TYPE_LABELS } from '../lib/ledger';
+  import type { ColumnType } from '../lib/model';
 
   const t = $derived(app.table(app.focusTableId));
-  const rowSel = $derived(app.selectedRow());
+  const cellSel = $derived(app.selectedCell());
+  const rowSel = $derived(app.selection && app.selection.anchor.c === 0 ? app.selectedRow() : null);
+  const colSel = $derived.by(() => {
+    const sel = app.selection;
+    if (!sel || t?.kind !== 'ledger') return null;
+    const c = sel.anchor.c;
+    return t.columns[c] ? { index: c, col: t.columns[c] } : null;
+  });
   const footSel = $derived(app.selectedFooter());
   const ro = $derived(app.readonly);
   const monthOptions = $derived(monthRange(addMonths(currentMonth(), -24), app.months[app.months.length - 1]));
@@ -34,23 +43,6 @@
     if (t && confirm(`Delete table "${t.name}"?`)) app.deleteTable(t.id);
   }
 
-  /** Categories in a ledger, most used first. */
-  function categories(ledger: LedgerTable | undefined): { name: string; count: number }[] {
-    const counts = new Map<string, number>();
-    for (const e of ledger?.entries ?? []) {
-      const c = e.category.trim();
-      if (c) counts.set(c, (counts.get(c) ?? 0) + 1);
-    }
-    return [...counts].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
-  }
-
-  function toggleCategory(name: string, on: boolean) {
-    const r = rowSel;
-    if (!r?.row.source) return;
-    const now = r.row.source.categories.filter((c) => c.trim().toLowerCase() !== name.toLowerCase());
-    app.setRowSource(r.table.id, r.row.id, { categories: on ? [...now, name] : now });
-  }
-
   /** First error a formula gives in the visible months, if any. */
   function formulaError(get: (m: string) => unknown, formula: string): string | null {
     const syntax = app.ev.check(formula);
@@ -60,24 +52,6 @@
       if (isErr(v as never)) return (v as { err: string }).err;
     }
     return null;
-  }
-
-  // ----- import -----
-  let fileEl = $state<HTMLInputElement | null>(null);
-  let importing = $state<{ ledger: LedgerTable; fileName: string; sheets: SheetData[] } | null>(null);
-
-  async function pickFile(e: Event) {
-    const input = e.target as HTMLInputElement;
-    const file = input.files?.[0];
-    input.value = '';
-    if (!file || t?.kind !== 'ledger') return;
-    try {
-      const sheets = (await readSpreadsheet(file.name, new Uint8Array(await file.arrayBuffer()))).filter((s) => s.rows.length);
-      if (!sheets.length) throw new Error('The file has no data.');
-      importing = { ledger: t, fileName: file.name, sheets };
-    } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
-    }
   }
 
   const KINDS: { kind: RowKind; label: string }[] = [
@@ -136,46 +110,9 @@
         <p class="hint">Type amounts into the row. Inflows positive, outflows negative.</p>
       {:else if kind === 'source' && row.source}
         {@const src = row.source}
-        {@const ledgers = app.ledgers()}
-        {@const ledger = ledgers.find((l) => l.ledger.id === src.ledgerId)?.ledger}
-        {#if ledgers.length === 0}
-          <p class="warn">There is no ledger in this file yet. Add one with “+ Ledger”.</p>
-        {:else}
-          <label>Ledger
-            <select value={src.ledgerId} disabled={ro} onchange={(e) => app.setRowSource(t.id, row.id, { ledgerId: value(e), categories: [] })}>
-              {#if !ledger}<option value="">— choose —</option>{/if}
-              {#each ledgers as l (l.ledger.id)}<option value={l.ledger.id}>{l.sheet} › {l.ledger.name}</option>{/each}
-            </select>
-          </label>
-          {#if ledger}
-            {@const cats = categories(ledger)}
-            <div class="field">
-              <span>Categories {src.categories.length ? `(${src.categories.length} chosen)` : '(all)'}</span>
-              {#if cats.length === 0}
-                <p class="hint">This ledger has no categories yet, so every entry counts.</p>
-              {:else}
-                <div class="cats">
-                  {#each cats as c (c.name)}
-                    <label class="check">
-                      <input type="checkbox" disabled={ro}
-                        checked={src.categories.some((x) => x.trim().toLowerCase() === c.name.toLowerCase())}
-                        onchange={(e) => toggleCategory(c.name, (e.target as HTMLInputElement).checked)} />
-                      {c.name} <span class="count">{c.count}</span>
-                    </label>
-                  {/each}
-                </div>
-              {/if}
-            </div>
-            <label>Note contains
-              {#key row.id}<input value={src.noteContains} disabled={ro} placeholder="optional" onchange={(e) => app.setRowSource(t.id, row.id, { noteContains: value(e).trim() })} />{/key}
-            </label>
-            <label class="check">
-              <input type="checkbox" checked={src.flip} disabled={ro} onchange={(e) => app.setRowSource(t.id, row.id, { flip: (e.target as HTMLInputElement).checked })} />
-              Flip sign
-            </label>
-          {/if}
-        {/if}
-        <p class="hint">Each month shows the ledger's total for that month (blue). Type in a cell to override it (orange corner); clear the cell to go back to the ledger.</p>
+        <SourcePicker mode="row" ledgerId={src.ledgerId} dateCol={src.dateCol} numberCol={src.amountCol} filters={src.filters} flip={src.flip} disabled={ro}
+          onchange={(p) => app.setRowSource(t.id, row.id, { ...(p.ledgerId !== undefined && { ledgerId: p.ledgerId }), ...(p.dateCol !== undefined && { dateCol: p.dateCol }), ...(p.numberCol !== undefined && { amountCol: p.numberCol }), ...(p.filters && { filters: p.filters }), ...(p.flip !== undefined && { flip: p.flip }) })} />
+        <p class="hint">Each month shows the total of the amount column for entries dated in that month (blue). Type in a cell to override it (orange corner); clear the cell to go back to the ledger.</p>
         {#if Object.keys(row.values).length && !ro}
           <button onclick={() => app.clearOverrides(t.id, row.id)}>Remove {Object.keys(row.values).length} override(s)</button>
         {/if}
@@ -188,6 +125,22 @@
         {#if row.formula && err}<p class="warn">{err}</p>{/if}
         <p class="hint">This row counts toward net cash flow, so it can't use Net cash flow or Balance. For those, use a footer formula.</p>
         {@render formulaHelp()}
+      {/if}
+    {/if}
+
+    {#if cellSel && rowKind(cellSel.row) !== 'formula'}
+      {@const cs = cellSel.table.cellSources[cellSel.key]}
+      <h3>Cell: {cellSel.row.label || 'untitled'} · {label(cellSel.month)}</h3>
+      <div class="segmented" role="radiogroup" aria-label="Cell value">
+        <button role="radio" aria-checked={!cs} class:on={!cs} disabled={ro} onclick={() => app.setCellSource(t.id, cellSel.key, null)}>{rowKind(cellSel.row) === 'source' ? 'From row' : 'Number'}</button>
+        <button role="radio" aria-checked={!!cs} class:on={!!cs} disabled={ro} onclick={() => !cs && app.setCellSource(t.id, cellSel.key, app.defaultCellSource())}>Ledger total</button>
+      </div>
+      {#if cs}
+        <SourcePicker mode="cell" ledgerId={cs.ledgerId} numberCol={cs.col} filters={cs.filters} flip={cs.flip} disabled={ro}
+          onchange={(p) => app.updateCellSource(t.id, cellSel.key, { ...(p.ledgerId !== undefined && { ledgerId: p.ledgerId }), ...(p.numberCol !== undefined && { col: p.numberCol }), ...(p.filters && { filters: p.filters }), ...(p.flip !== undefined && { flip: p.flip }) })} />
+        <p class="hint">This cell shows the total of one ledger column over all matching entries, whatever their dates (blue corner). Typing a number in the cell replaces it.</p>
+      {:else}
+        <p class="hint">To fill the whole row month by month from a ledger, select the row's first cell. To show one ledger column's total in just this cell, choose “Ledger total”.</p>
       {/if}
     {/if}
 
@@ -206,26 +159,36 @@
       {#if !ro}<button class="danger" onclick={() => app.deleteFooter(t.id, f.id)}>Delete footer row</button>{/if}
     {/if}
   {:else}
-    {@const cats = categories(t)}
     <h3>Ledger</h3>
     <label>Name {#key t.id}<input value={t.name} disabled={ro} onchange={(e) => app.renameTable(t.id, value(e))} />{/key}</label>
-    <p class="hint">{t.entries.length} entries. Cash-flow rows can take their numbers from this ledger: choose “From ledger” on a row.</p>
+    <p class="hint">{t.entries.length} entries. Cash-flow rows can take their numbers from this ledger: select a row's first cell and choose “From ledger”.</p>
     {#if !ro}
       <div class="buttons">
-        <button class="primary" onclick={() => fileEl?.click()}>Import CSV / Excel…</button>
-        <input bind:this={fileEl} type="file" hidden accept=".csv,.tsv,.txt,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onchange={pickFile} />
-        <button onclick={() => app.sortLedger(t.id)}>Sort by date</button>
+        <button class="primary" onclick={() => pickImportFile(t.id)}>Import CSV / Excel…</button>
         <button onclick={() => app.addRow(t.id)}>+ Entry</button>
       </div>
       {#if t.importedFrom}
         <p class="hint">Last imported from <b>{t.importedFrom}</b>. To refresh, import the new export; the column mapping is remembered.</p>
       {/if}
     {/if}
-    {#if cats.length}
-      <div class="field">
-        <span>Categories</span>
-        <ul class="catlist">{#each cats as c (c.name)}<li>{c.name} <span class="count">{c.count}</span></li>{/each}</ul>
-      </div>
+    {#if colSel}
+      {@const col = colSel.col}
+      <h3>Column: {col.name}</h3>
+      <label>Name {#key col.id}<input value={col.name} disabled={ro} onchange={(e) => app.renameColumn(t.id, col.id, value(e))} />{/key}</label>
+      <label>Cell format
+        <select value={col.type} disabled={ro} onchange={(e) => app.setColumnType(t.id, col.id, value(e) as ColumnType)}>
+          {#each Object.entries(COLUMN_TYPE_LABELS) as [k, v] (k)}<option value={k}>{v}</option>{/each}
+        </select>
+      </label>
+      {#if !ro}
+        <div class="buttons">
+          <button onclick={() => app.insertColumn(t.id, colSel.index)} title="⌥←">+ Column before</button>
+          <button onclick={() => app.insertColumn(t.id, colSel.index + 1)} title="⌥→">+ Column after</button>
+          <button onclick={() => app.sortLedger(t.id, col.id)}>Sort A→Z</button>
+          <button onclick={() => app.sortLedger(t.id, col.id, true)}>Sort Z→A</button>
+          <button class="danger" onclick={() => app.deleteSelectedColumns()}>Delete column</button>
+        </div>
+      {/if}
     {/if}
     {#if !ro}<button class="danger" onclick={remove}>Delete ledger</button>{/if}
   {/if}
@@ -243,9 +206,7 @@
   </ul>
 </aside>
 
-{#if importing}
-  <ImportDialog ledger={importing.ledger} fileName={importing.fileName} sheets={importing.sheets} onclose={() => (importing = null)} />
-{/if}
+
 
 {#snippet formulaHelp()}
   <details class="help">
@@ -280,20 +241,12 @@
   h3:first-child {
     margin-top: 8px;
   }
-  label,
-  .field {
+  label {
     display: flex;
     flex-direction: column;
     gap: 4px;
     margin-bottom: 10px;
     color: var(--muted);
-  }
-  label.check {
-    flex-direction: row;
-    align-items: center;
-    gap: 6px;
-    color: var(--text);
-    margin-bottom: 4px;
   }
   input:not([type='checkbox']),
   select {
@@ -340,23 +293,6 @@
     background: var(--accent);
     border-color: var(--accent);
     color: #fff;
-  }
-  .cats {
-    max-height: 180px;
-    overflow-y: auto;
-    border: 1px solid var(--line);
-    border-radius: 6px;
-    padding: 6px 8px;
-  }
-  .count {
-    color: var(--muted);
-    font-size: 11px;
-  }
-  .catlist {
-    margin: 0;
-    padding-left: 16px;
-    color: var(--text);
-    line-height: 1.6;
   }
   .hint {
     color: var(--muted);

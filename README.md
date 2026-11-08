@@ -72,6 +72,37 @@ sheets as tabs along the top, several tables per sheet placed on a canvas, month
   their snapshots); the browser copy is kept
 - Without the server (`npm run dev`), the app keeps files in the browser as before
 
+**Mac-style interface (HIG)**
+- Menu bar (File, Edit, Insert, Table, Format, View) listing every command with its shortcut;
+  toolbar for frequent ones; right-click context menus; inspector panel
+- Mouse: a click selects; double-click edits a cell, renames a table (title) or a ledger column
+  (header). Touch: a tap selects and shows the edit menu (Cut, Copy, Paste, Delete, Row Above/Below,
+  ••• for more); tap again to edit; long-press for the full menu. Menus have 44 pt targets on touch
+- Numbers shortcuts: ⌥↑ / ⌥↓ insert a row above / below, ⌥← / ⌥→ insert a column before / after
+  (ledgers), ⌥⌘⌫ delete rows, ⌘Z / ⇧⌘Z, ⌘A, ⌥⌘I inspector, ⇧⌘O all files, ⇧⌘S download
+- Select a table by its title, then Delete / ⌘C / ⌘X act on the whole table
+- Row and column tabs (shown on the selected table): click/tap selects the whole row or column
+  (Shift extends); drag to reorder; drop on the canvas to make a new table or ledger (⌥ copies)
+- ⤢ in a title bar fills the workspace with that table; header rows and the first column stay put
+  while scrolling; esc restores
+- The first column is styled as a header column; month headers are centred
+
+**Ledgers**
+- Columns can be renamed (double-click the header), inserted, deleted, moved, sorted, and given a
+  cell format: Date, Number, Text, Checkbox (click or Space to tick) or Files
+- Files cells hold any number of attachments (up to 25 MB each): Add files… (several at once) or
+  drop files onto the cell; open or download them from the popover. On the server they are stored
+  in D1 next to the file; removing one from a cell keeps the stored copy so Undo and snapshots still
+  open it. Downloaded copies of a file list attachment names but don't include the files
+- Import maps file columns onto any ledger column (matched by name, plus Chinese/English synonyms)
+
+**Taking numbers from a ledger**
+- Select a row's first cell → Row: From ledger. Each month = the amount column's total for entries
+  dated in that month (date column and amount column are chosen), with filters (text is any of /
+  contains, checkbox ticked / not ticked) and sign flip
+- Select one month cell → Cell: Ledger total. That cell = one number column's total over all
+  matching entries, whatever their dates (blue corner). Typing a number replaces it
+
 **Next**
 - Phase 4: Feishu and Huoban connectors, pulled into ledgers on the sync timer
 - Last: view-only share links

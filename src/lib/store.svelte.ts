@@ -17,6 +17,10 @@ import {
   type LedgerTable,
   type Row,
   type RowSource,
+  type CellSource,
+  type ColumnType,
+  type Filter,
+  type Attachment,
   type Table,
   type Workbook,
 } from './model';
@@ -36,13 +40,17 @@ import {
   cellsInRanges,
   FIXED_FOOTERS,
   gridModel,
-  LEDGER_COLS,
+  columnWidth,
   styleKey,
   type GridModel,
   type Pos,
   type Range,
 } from './grid';
 import { SyncLoop } from './sync';
+import { attachmentStore } from './attachments';
+import type { SheetData } from './import/xlsx';
+import { convertCell, firstColumnOf, newColumnId, COLUMN_TYPE_LABELS } from './ledger';
+import { amountColumn } from './import/mapping';
 
 const SHEET_KEY = 'cashflow-allseeing.activeSheet.';
 const MAX_HISTORY = 200;
@@ -78,7 +86,7 @@ function writeStorage(key: string, value: string) {
 }
 
 export function tableWidth(t: Table, months: number): number {
-  return t.kind === 'ledger' ? LEDGER_COLS.reduce((s, c) => s + c.width, 0) : LABEL_W + months * COL_W;
+  return t.kind === 'ledger' ? t.columns.reduce((s, c) => s + columnWidth(c), 0) : LABEL_W + months * COL_W;
 }
 
 export function tableHeight(t: Table): number {
@@ -109,6 +117,21 @@ class AppState {
   selection = $state<Selection | null>(null);
   /** Table shown in the inspector (set by clicking a title or a cell). */
   focusTableId = $state<string | null>(null);
+  // ---------- interface state shared by menus, toolbar and panels ----------
+  showInspector = $state(typeof window !== 'undefined' && window.innerWidth >= 1000);
+  /** Table whose title is being renamed in place. */
+  renamingTableId = $state<string | null>(null);
+  /** Ledger column whose header is being renamed in place. */
+  renamingColumn = $state<{ tableId: string; colId: string } | null>(null);
+  /** An open context menu (right-click / long-press) or edit menu (after a tap), in viewport pixels. */
+  menu = $state<{ kind: 'context' | 'edit'; target: 'cells' | 'table' | 'column'; tableId: string; x: number; y: number } | null>(null);
+  /** A spreadsheet being mapped in the import dialog. */
+  importing = $state<{ ledgerId: string; fileName: string; sheets: SheetData[] } | null>(null);
+  /** Table shown filling the whole workspace. */
+  maximizedId = $state<string | null>(null);
+
+  /** The files cell whose attachments popover is open. */
+  filesCell = $state<{ tableId: string; rowId: string; colId: string } | null>(null);
   /** Keyed by row id, so edits arriving from another window can't shift it. */
   editing = $state<{ tableId: string; rowId: string; c: number } | null>(null);
   months = $state(visibleWindow());
@@ -296,6 +319,9 @@ class AppState {
     this.selection = null;
     this.focusTableId = null;
     this.editing = null;
+    this.menu = null;
+    this.maximizedId = null;
+    this.filesCell = null;
     this.saveState = 'saved';
     if (snapshot) {
       // Show the months as they were at the snapshot: its month to December of the next year.
@@ -337,7 +363,7 @@ class AppState {
     try {
       const meta = await fileStore.takeSnapshot(f.id, label);
       await this.refreshSnapshots();
-      this.flashNotice(`Snapshot "${meta.label}" saved.`);
+      this.flashNotice(`Snapshot "${meta.label}" saved.`, 'info');
     } catch {
       this.flashNotice('Could not save the snapshot: storage is full.');
     }
@@ -509,6 +535,7 @@ class AppState {
     this.activeSheetId = id;
     this.selection = null;
     this.focusTableId = null;
+    this.maximizedId = null;
     if (this.file) writeStorage(SHEET_KEY + this.file.id, id);
   }
 
@@ -560,6 +587,7 @@ class AppState {
     this.change(() => (s.tables = s.tables.filter((t) => t.id !== id)));
     if (this.selection?.tableId === id) this.selection = null;
     if (this.focusTableId === id) this.focusTableId = null;
+    if (this.maximizedId === id) this.maximizedId = null;
   }
 
   renameTable(id: string, name: string) {
@@ -600,6 +628,203 @@ class AppState {
     const at = sel && sel.anchor.r < m.body ? sel.anchor.r + 1 : m.body;
     this.change(() => m.insertBodyRow(at));
     this.select(tableId, { r: at, c: 0 });
+  }
+
+  /** Insert a row above or below the selection (⌥↑ / ⌥↓), like Numbers. */
+  insertRow(where: 'above' | 'below') {
+    const sel = this.selection;
+    const t = this.table(sel?.tableId ?? this.focusTableId);
+    if (!t || this.readonly) return;
+    const m = this.model(t);
+    let at = m.body;
+    if (sel && sel.tableId === t.id) {
+      const rows = cellsInRanges(sel.ranges).map((p) => p.r).filter((r) => r < m.body);
+      if (rows.length) at = where === 'above' ? Math.min(...rows) : Math.max(...rows) + 1;
+      else if (where === 'above') at = m.body; // on a total/footer row: add at the end of the body
+    }
+    this.change(() => m.insertBodyRow(at));
+    this.select(t.id, { r: at, c: sel?.tableId === t.id ? sel.anchor.c : 0 });
+  }
+
+  /** Insert a column before or after the selection (⌥← / ⌥→). Only ledgers have free columns. */
+  insertColumnAt(where: 'before' | 'after') {
+    const sel = this.selection;
+    const t = this.table(sel?.tableId ?? this.focusTableId);
+    if (!t || this.readonly) return;
+    if (t.kind !== 'ledger') {
+      this.flashNotice('Month columns follow the forecast window, so they can’t be added by hand.');
+      return;
+    }
+    let at = t.columns.length;
+    if (sel && sel.tableId === t.id) {
+      const cols = cellsInRanges(sel.ranges).map((p) => p.c);
+      at = where === 'before' ? Math.min(...cols) : Math.max(...cols) + 1;
+    }
+    this.insertColumn(t.id, at);
+  }
+
+  /** Select whole rows (row tab) or whole columns (column tab). */
+  selectLines(tableId: string, axis: 'row' | 'col', from: number, to = from, extend = false) {
+    const t = this.table(tableId);
+    if (!t) return;
+    const m = this.model(t);
+    const sel = this.selection;
+    let start = from;
+    // Shift+click extends from the line already selected.
+    if (extend && sel?.tableId === tableId) start = axis === 'row' ? sel.anchor.r : sel.anchor.c;
+    const [a, b] = [Math.min(start, to), Math.max(start, to)];
+    this.focusTableId = tableId;
+    this.selection =
+      axis === 'row'
+        ? { tableId, ranges: [{ a: { r: a, c: 0 }, b: { r: b, c: m.cols - 1 } }], anchor: { r: start, c: 0 } }
+        : { tableId, ranges: [{ a: { r: 0, c: a }, b: { r: m.rows - 1, c: b } }], anchor: { r: 0, c: start } };
+  }
+
+  /** Move body rows (by index) so they start at index `to` (counted before the move). */
+  moveRows(tableId: string, indices: number[], to: number) {
+    const t = this.table(tableId);
+    if (!t || this.readonly) return;
+    const items = bodyItems(t) as { id: string }[];
+    const pick = [...new Set(indices)].filter((i) => i >= 0 && i < items.length).sort((a, b) => a - b);
+    if (!pick.length) return;
+    const ids = new Set(pick.map((i) => items[i].id));
+    const before = pick.filter((i) => i < to).length;
+    const target = Math.max(0, Math.min(items.length - pick.length, to - before));
+    if (pick.every((i, k) => i === target + k)) return; // dropped where they already are
+    this.change(() => {
+      const list = bodyItems(t) as { id: string }[];
+      const moving = list.filter((x) => ids.has(x.id));
+      const rest = list.filter((x) => !ids.has(x.id));
+      rest.splice(target, 0, ...moving);
+      list.splice(0, list.length, ...rest);
+    });
+    const m = this.model(t);
+    this.selection = {
+      tableId,
+      ranges: [{ a: { r: target, c: 0 }, b: { r: target + pick.length - 1, c: m.cols - 1 } }],
+      anchor: { r: target, c: 0 },
+    };
+  }
+
+  /** Move ledger columns (by index) so they start at index `to` (counted before the move). */
+  moveColumns(tableId: string, indices: number[], to: number) {
+    const t = this.table(tableId);
+    if (t?.kind !== 'ledger' || this.readonly) return;
+    const pick = [...new Set(indices)].filter((i) => i >= 0 && i < t.columns.length).sort((a, b) => a - b);
+    if (!pick.length) return;
+    const ids = new Set(pick.map((i) => t.columns[i].id));
+    const before = pick.filter((i) => i < to).length;
+    const target = Math.max(0, Math.min(t.columns.length - pick.length, to - before));
+    if (pick.every((i, k) => i === target + k)) return;
+    this.change(() => {
+      const moving = t.columns.filter((c) => ids.has(c.id));
+      const rest = t.columns.filter((c) => !ids.has(c.id));
+      rest.splice(target, 0, ...moving);
+      t.columns = rest;
+    });
+    this.selectLines(tableId, 'col', target, target + pick.length - 1);
+  }
+
+  /**
+   * Drag rows out of a table onto the canvas: they become a new table (or ledger)
+   * at (x, y). Moves them, or copies them when `copy` is set (⌥ held).
+   */
+  extractRows(tableId: string, indices: number[], x: number, y: number, copy: boolean) {
+    const t = this.table(tableId);
+    if (!t || this.readonly) return;
+    const items = bodyItems(t);
+    const pick = [...new Set(indices)].filter((i) => i >= 0 && i < items.length).sort((a, b) => a - b);
+    if (!pick.length) return;
+    const ids = new Set(pick.map((i) => items[i].id));
+    const plain = $state.snapshot(t) as Table;
+    const count = this.sheet.tables.filter((x) => x.kind === t.kind).length + 1;
+    const idMap = new Map<string, string>();
+    const newId = (old: string) => {
+      if (!copy) return old;
+      if (!idMap.has(old)) idMap.set(old, uid());
+      return idMap.get(old)!;
+    };
+    const styles: Record<string, string> = {};
+    for (const [k, v] of Object.entries(plain.styles)) {
+      const [rowId, col] = k.split('|');
+      if (ids.has(rowId)) styles[`${newId(rowId)}|${col}`] = v;
+    }
+    let made: Table;
+    if (plain.kind === 'ledger') {
+      made = {
+        ...newLedger(`Ledger ${count}`, snap(x), snap(y)),
+        columns: plain.columns.map((c) => ({ ...c })),
+        entries: plain.entries.filter((e) => ids.has(e.id)).map((e) => ({ ...e, id: newId(e.id) })),
+        styles,
+      };
+    } else {
+      const cellSources: Record<string, CellSource> = {};
+      for (const [k, v] of Object.entries(plain.cellSources)) {
+        const [rowId, month] = k.split('|');
+        if (ids.has(rowId)) cellSources[`${newId(rowId)}|${month}`] = v;
+      }
+      made = {
+        ...newTable(`Table ${count}`, snap(x), snap(y)),
+        openingMonth: plain.openingMonth,
+        rows: plain.rows.filter((r) => ids.has(r.id)).map((r) => ({ ...r, id: newId(r.id) })),
+        cellSources,
+        styles,
+      };
+    }
+    this.change(() => {
+      if (!copy) {
+        if (t.kind === 'ledger') t.entries = t.entries.filter((e) => !ids.has(e.id));
+        else {
+          t.rows = t.rows.filter((r) => !ids.has(r.id));
+          for (const k of Object.keys(t.cellSources)) if (ids.has(k.split('|')[0])) delete t.cellSources[k];
+        }
+        for (const k of Object.keys(t.styles)) if (ids.has(k.split('|')[0])) delete t.styles[k];
+      }
+      this.sheet.tables.push(made);
+    });
+    this.focusTableId = made.id;
+    this.selectLines(made.id, 'row', 0, pick.length - 1);
+  }
+
+  /** Drag ledger columns out onto the canvas: a new ledger with those columns and every entry's values. */
+  extractColumns(tableId: string, indices: number[], x: number, y: number, copy: boolean) {
+    const t = this.table(tableId);
+    if (t?.kind !== 'ledger' || this.readonly) return;
+    const pick = [...new Set(indices)].filter((i) => i >= 0 && i < t.columns.length).sort((a, b) => a - b);
+    if (!pick.length) return;
+    if (!copy && pick.length === t.columns.length) {
+      this.flashNotice('Drag the table by its title to move all of it.');
+      return;
+    }
+    const plain = $state.snapshot(t) as LedgerTable;
+    const cols = pick.map((i) => plain.columns[i]);
+    const colIds = new Set(cols.map((c) => c.id));
+    const count = this.sheet.tables.filter((x) => x.kind === 'ledger').length + 1;
+    const entryIds = new Map(plain.entries.map((e) => [e.id, uid()]));
+    const styles: Record<string, string> = {};
+    for (const [k, v] of Object.entries(plain.styles)) {
+      const [rowId, col] = k.split('|');
+      if (colIds.has(col) && entryIds.has(rowId)) styles[`${entryIds.get(rowId)}|${col}`] = v;
+    }
+    const made: LedgerTable = {
+      ...newLedger(`Ledger ${count}`, snap(x), snap(y)),
+      columns: cols.map((c) => ({ ...c })),
+      entries: plain.entries.map((e) => ({
+        id: entryIds.get(e.id)!,
+        cells: Object.fromEntries(Object.entries(e.cells).filter(([k]) => colIds.has(k))),
+      })),
+      styles,
+    };
+    this.change(() => {
+      if (!copy) {
+        t.columns = t.columns.filter((c) => !colIds.has(c.id));
+        for (const e of t.entries) for (const id of colIds) delete e.cells[id];
+        for (const k of Object.keys(t.styles)) if (colIds.has(k.split('|')[1])) delete t.styles[k];
+      }
+      this.sheet.tables.push(made);
+    });
+    this.focusTableId = made.id;
+    this.selectLines(made.id, 'col', 0, cols.length - 1);
   }
 
   /** Delete every body row touched by the selection. */
@@ -667,17 +892,75 @@ class AppState {
       delete row.formula;
       delete row.source;
       if (kind === 'formula') row.formula = '';
-      if (kind === 'source') {
-        const first = this.ledgers()[0]?.ledger;
-        row.source = { ledgerId: first?.id ?? '', categories: [], noteContains: '', flip: false };
-      }
+      if (kind === 'source') row.source = this.defaultRowSource(this.ledgers()[0]?.ledger);
     });
+  }
+
+  /** A row source pointing at a ledger's first date column and main number column. */
+  defaultRowSource(ledger: LedgerTable | undefined): RowSource {
+    return {
+      ledgerId: ledger?.id ?? '',
+      dateCol: (ledger && firstColumnOf(ledger, 'date')?.id) ?? 'date',
+      amountCol: (ledger && amountColumn(ledger.columns)?.id) ?? 'amount',
+      filters: [],
+      flip: false,
+    };
   }
 
   setRowSource(tableId: string, rowId: string, patch: Partial<RowSource>) {
     const row = this.findRow(tableId, rowId);
     if (!row?.source) return;
+    // Switching ledger: pick that ledger's columns and drop filters on the old one's columns.
+    if (patch.ledgerId && patch.ledgerId !== row.source.ledgerId) {
+      const l = this.table(patch.ledgerId);
+      patch = { ...this.defaultRowSource(l?.kind === 'ledger' ? l : undefined), flip: row.source.flip, ...patch };
+    }
     this.change(() => Object.assign(row.source!, patch));
+  }
+
+  // ---------- cell sources (one cell = total of a ledger column) ----------
+
+  /** The cash-flow body cell under the anchor, if a single month cell is the focus. */
+  selectedCell(): { table: CashTable; row: Row; month: string; key: string } | null {
+    const sel = this.selection;
+    const t = this.table(sel?.tableId);
+    if (!sel || t?.kind !== 'cashflow' || sel.anchor.c === 0 || sel.anchor.r >= t.rows.length) return null;
+    const row = t.rows[sel.anchor.r];
+    const month = this.months[sel.anchor.c - 1];
+    return { table: t, row, month, key: `${row.id}|${month}` };
+  }
+
+  setCellSource(tableId: string, key: string, source: CellSource | null) {
+    const t = this.table(tableId);
+    if (t?.kind !== 'cashflow') return;
+    this.change(() => {
+      if (source) {
+        t.cellSources[key] = source;
+        // The ledger total replaces a typed number in that cell.
+        const [rowId, month] = key.split('|');
+        const row = t.rows.find((r) => r.id === rowId);
+        if (row) delete row.values[month];
+      } else {
+        delete t.cellSources[key];
+      }
+    });
+  }
+
+  updateCellSource(tableId: string, key: string, patch: Partial<CellSource>) {
+    const t = this.table(tableId);
+    const cur = t?.kind === 'cashflow' ? t.cellSources[key] : undefined;
+    if (!cur) return;
+    if (patch.ledgerId && patch.ledgerId !== cur.ledgerId) {
+      const l = this.table(patch.ledgerId);
+      const col = l?.kind === 'ledger' ? amountColumn(l.columns)?.id : undefined;
+      patch = { filters: [], col: col ?? '', ...patch };
+    }
+    this.change(() => Object.assign(cur, patch));
+  }
+
+  defaultCellSource(): CellSource {
+    const l = this.ledgers()[0]?.ledger;
+    return { ledgerId: l?.id ?? '', col: (l && amountColumn(l.columns)?.id) ?? 'amount', filters: [], flip: false };
   }
 
   setRowFormula(tableId: string, rowId: string, formula: string) {
@@ -719,7 +1002,7 @@ class AppState {
     const t = this.table(ledgerId);
     if (t?.kind !== 'ledger') return;
     this.change(() => {
-      const keep = mode === 'append' ? t.entries.filter((e) => e.date || e.amount !== null || e.note || e.category) : [];
+      const keep = mode === 'append' ? t.entries.filter((e) => Object.keys(e.cells).length > 0) : [];
       t.entries = [...keep, ...entries];
       t.importMap = map;
       t.importedFrom = fileName;
@@ -728,15 +1011,212 @@ class AppState {
       }
     });
     this.selection = null;
-    this.flashNotice(`Imported ${entries.length} entries into "${t.name}".`);
+    this.flashNotice(`Imported ${entries.length} entries into "${t.name}".`, 'info');
   }
 
-  sortLedger(ledgerId: string) {
+  /** Sort a ledger by one column (default: its first date column). Empty cells go last. */
+  sortLedger(ledgerId: string, colId?: string, descending = false) {
     const t = this.table(ledgerId);
     if (t?.kind !== 'ledger') return;
+    const col = t.columns.find((c) => c.id === colId) ?? firstColumnOf(t, 'date') ?? t.columns[0];
+    if (!col) return;
+    const key = (v: unknown): number | string =>
+      typeof v === 'number' ? v : v === true ? 1 : typeof v === 'string' ? v.toLowerCase() : Array.isArray(v) ? v.length : '';
     this.change(() => {
-      // Undated entries go last; ties keep their order.
-      t.entries = [...t.entries].sort((a, b) => (a.date || '9999') .localeCompare(b.date || '9999'));
+      t.entries = [...t.entries].sort((a, b) => {
+        const x = a.cells[col.id];
+        const y = b.cells[col.id];
+        if (x === undefined || y === undefined) return x === undefined ? (y === undefined ? 0 : 1) : -1;
+        const kx = key(x);
+        const ky = key(y);
+        const d = typeof kx === 'number' && typeof ky === 'number' ? kx - ky : String(kx).localeCompare(String(ky));
+        return descending ? -d : d;
+      });
+    });
+  }
+
+  // ---------- ledger columns ----------
+
+  /** Insert a text column at index `at`. */
+  insertColumn(ledgerId: string, at: number, type: ColumnType = 'text') {
+    const t = this.table(ledgerId);
+    if (t?.kind !== 'ledger' || this.readonly) return;
+    const id = newColumnId(t);
+    const name = COLUMN_TYPE_LABELS[type] === 'Text' ? `Column ${t.columns.length + 1}` : COLUMN_TYPE_LABELS[type];
+    const i = Math.max(0, Math.min(at, t.columns.length));
+    this.change(() => t.columns.splice(i, 0, { id, name, type }));
+    this.select(t.id, { r: 0, c: i });
+  }
+
+  renameColumn(ledgerId: string, colId: string, name: string) {
+    const t = this.table(ledgerId);
+    const col = t?.kind === 'ledger' ? t.columns.find((c) => c.id === colId) : undefined;
+    const n = name.trim();
+    if (col && n && n !== col.name) this.change(() => (col.name = n));
+  }
+
+  /** Change a column's type, converting what can be converted. Returns how many cells were cleared. */
+  setColumnType(ledgerId: string, colId: string, type: ColumnType): number {
+    const t = this.table(ledgerId);
+    const col = t?.kind === 'ledger' ? t.columns.find((c) => c.id === colId) : undefined;
+    if (!t || t.kind !== 'ledger' || !col || col.type === type) return 0;
+    let lost = 0;
+    this.change(() => {
+      for (const e of t.entries) {
+        const v = e.cells[col.id];
+        if (v === undefined) continue;
+        const out = convertCell(col.type, type, v);
+        if (out === undefined) {
+          delete e.cells[col.id];
+          lost++;
+        } else e.cells[col.id] = out;
+      }
+      col.type = type;
+    });
+    if (lost) this.flashNotice(`${lost} cell(s) couldn't be converted to ${COLUMN_TYPE_LABELS[type]} and were cleared (Undo brings them back).`);
+    return lost;
+  }
+
+  /** Delete every column touched by the selection (a ledger keeps at least one). */
+  deleteSelectedColumns() {
+    const sel = this.selection;
+    const t = this.table(sel?.tableId);
+    if (!sel) return;
+    if (t?.kind !== 'ledger') {
+      this.flashNotice('Month columns can’t be deleted; they follow the forecast window.');
+      return;
+    }
+    const ids = new Set(cellsInRanges(sel.ranges).map((p) => t.columns[p.c]?.id).filter(Boolean));
+    if (ids.size >= t.columns.length) {
+      this.flashNotice('A ledger needs at least one column.');
+      return;
+    }
+    this.change(() => {
+      t.columns = t.columns.filter((c) => !ids.has(c.id));
+      for (const e of t.entries) for (const id of ids) delete e.cells[id];
+      for (const k of Object.keys(t.styles)) if (ids.has(k.split('|')[1])) delete t.styles[k];
+    });
+    this.select(t.id, { r: sel.anchor.r, c: Math.min(sel.anchor.c, t.columns.length - 1) });
+  }
+
+  moveColumn(ledgerId: string, from: number, to: number) {
+    const t = this.table(ledgerId);
+    if (t?.kind !== 'ledger' || from === to || to < 0 || to >= t.columns.length) return;
+    this.change(() => {
+      const [c] = t.columns.splice(from, 1);
+      t.columns.splice(to, 0, c);
+    });
+  }
+
+  // ---------- attachments ----------
+
+  private entryCell(tableId: string, rowId: string, colId: string) {
+    const t = this.table(tableId);
+    if (t?.kind !== 'ledger') return null;
+    const e = t.entries.find((x) => x.id === rowId);
+    const col = t.columns.find((c) => c.id === colId && c.type === 'files');
+    return e && col ? { t, e, col } : null;
+  }
+
+  attachmentsOf(tableId: string, rowId: string, colId: string): Attachment[] {
+    const v = this.entryCell(tableId, rowId, colId)?.e.cells[colId];
+    return Array.isArray(v) ? v : [];
+  }
+
+  /** Upload files and add them to a files cell. Returns how many were added. */
+  async attachFiles(tableId: string, rowId: string, colId: string, files: File[]): Promise<number> {
+    const f = this.file;
+    if (!f || this.readonly || !files.length) return 0;
+    const added: Attachment[] = [];
+    const errors: string[] = [];
+    for (const [i, file] of files.entries()) {
+      this.flashNotice(`Uploading ${i + 1} of ${files.length}: ${file.name}…`, 'info');
+      try {
+        added.push(await attachmentStore.upload(f.id, file));
+      } catch (e) {
+        errors.push((e as Error).message);
+      }
+    }
+    const hit = this.entryCell(tableId, rowId, colId);
+    if (hit && added.length) {
+      this.change(() => {
+        const cur = hit.e.cells[colId];
+        hit.e.cells[colId] = [...(Array.isArray(cur) ? cur : []), ...added];
+      });
+    }
+    if (errors.length) this.flashNotice(errors.join(' '));
+    else this.flashNotice(`Attached ${added.length} file${added.length === 1 ? '' : 's'}.`, 'info');
+    return added.length;
+  }
+
+  /** Remove a file from a cell. The stored bytes stay, so Undo and snapshots still open it. */
+  detachFile(tableId: string, rowId: string, colId: string, attachmentId: string) {
+    const hit = this.entryCell(tableId, rowId, colId);
+    if (!hit) return;
+    this.change(() => {
+      const cur = hit.e.cells[colId];
+      const rest = (Array.isArray(cur) ? cur : []).filter((a) => a.id !== attachmentId);
+      if (rest.length) hit.e.cells[colId] = rest;
+      else delete hit.e.cells[colId];
+    });
+  }
+
+  async openAttachment(a: Attachment, download = false) {
+    if (!this.file) return;
+    // Open the window first, inside the tap/click, so Safari doesn't block it as a pop-up.
+    const win = download ? null : window.open('', '_blank');
+    try {
+      const url = await attachmentStore.url(this.file.id, a, download);
+      if (win) win.location.href = url;
+      else {
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = a.name;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+      }
+    } catch (e) {
+      win?.close();
+      this.flashNotice((e as Error).message);
+    }
+  }
+
+  /** Fill the workspace with the focused table, or go back to the canvas. */
+  toggleMaximize(id?: string) {
+    if (this.maximizedId && (!id || id === this.maximizedId)) {
+      this.maximizedId = null;
+      return;
+    }
+    const t = this.table(id ?? this.selection?.tableId ?? this.focusTableId);
+    if (t) {
+      this.maximizedId = t.id;
+      this.focusTableId = t.id;
+    }
+  }
+
+  /** File name editing happens in the menu bar; it listens for this. */
+  renamingFile = $state(false);
+  startRenameFile() {
+    if (this.file && !this.readonly) this.renamingFile = true;
+  }
+
+  /** Flip checkbox cells: all on if any selected one is off, else all off. */
+  toggleCheckboxes(cells?: Pos[]) {
+    const sel = this.selection;
+    const t = this.table(sel?.tableId);
+    if (!sel || t?.kind !== 'ledger' || this.readonly) return;
+    const targets = (cells ?? cellsInRanges(sel.ranges)).filter(
+      (p) => p.r < t.entries.length && t.columns[p.c]?.type === 'checkbox',
+    );
+    if (!targets.length) return;
+    const on = targets.some((p) => t.entries[p.r].cells[t.columns[p.c].id] !== true);
+    this.change(() => {
+      for (const p of targets) {
+        const e = t.entries[p.r];
+        if (on) e.cells[t.columns[p.c].id] = true;
+        else delete e.cells[t.columns[p.c].id];
+      }
     });
   }
 
@@ -828,6 +1308,18 @@ class AppState {
       this.flashNotice(ok);
       return;
     }
+    const kind = m.cellType(p);
+    if (kind === 'checkbox') {
+      this.toggleCheckboxes([p]);
+      return;
+    }
+    if (kind === 'files') {
+      this.filesCell = { tableId: t.id, rowId: m.rowId(p.r), colId: m.colKey(p.c) };
+      return;
+    }
+    if (seed === undefined && t.kind === 'cashflow' && p.c > 0 && t.cellSources[`${m.rowId(p.r)}|${m.colKey(p.c)}`]) {
+      this.flashNotice('This cell shows a ledger total. Type a number to replace it, or change it in the panel.');
+    }
     const cell = this.contentEl?.querySelector<HTMLElement>(
       `[data-t="${t.id}"][data-r="${p.r}"][data-c="${p.c}"]`,
     );
@@ -866,8 +1358,12 @@ class AppState {
 
   private noticeTimer: ReturnType<typeof setTimeout> | null = null;
 
-  flashNotice(msg: string) {
+  /** 'info' for confirmations, 'error' (default) for problems. */
+  noticeTone = $state<'info' | 'error'>('error');
+
+  flashNotice(msg: string, tone: 'info' | 'error' = 'error') {
     this.notice = msg;
+    this.noticeTone = tone;
     if (this.noticeTimer) clearTimeout(this.noticeTimer);
     this.noticeTimer = setTimeout(() => (this.notice = ''), 3500);
   }
@@ -883,7 +1379,7 @@ class AppState {
     if (!t || this.readonly) return false;
     const m = this.model(t);
     if (m.editable(p) !== true) return true;
-    if (m.raw(p) === text) return true;
+    if (m.raw(p) === text && (text !== '' || m.isEmpty(p))) return true;
     let ok = true;
     // Validate on a throwaway check first so an invalid entry doesn't create an undo step.
     const probe = gridModel(structuredClone($state.snapshot(t)) as Table, this.months, this.ev);
@@ -897,10 +1393,14 @@ class AppState {
     const t = this.table(sel?.tableId);
     if (!sel || !t || this.readonly) return;
     const m = this.model(t);
-    const cells = cellsInRanges(sel.ranges).filter((p) => m.editable(p) === true && m.raw(p) !== '');
+    const cells = cellsInRanges(sel.ranges).filter((p) => m.editable(p) === true && !m.isEmpty(p));
     if (cells.length === 0) return;
     this.change(() => {
-      for (const p of cells) m.set(p, '');
+      for (const p of cells) {
+        const kind = m.cellType(p);
+        if ((kind === 'files' || kind === 'checkbox') && t.kind === 'ledger') delete t.entries[p.r].cells[t.columns[p.c].id];
+        else m.set(p, '');
+      }
     });
   }
 

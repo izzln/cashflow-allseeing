@@ -39,10 +39,10 @@
   <thead>
     <tr style="height:{ROW_H}px">
       <th class="corner" rowspan="2"></th>
-      {#each years as y (y.year)}<th class="year" colspan={y.count}>{y.year}</th>{/each}
+      {#each years as y (y.year)}<th class="year center" colspan={y.count}>{y.year}</th>{/each}
     </tr>
     <tr style="height:{ROW_H}px">
-      {#each months as m (m)}<th class="right">{monthLabel(m)}</th>{/each}
+      {#each months as m (m)}<th class="center">{monthLabel(m)}</th>{/each}
     </tr>
   </thead>
   <tbody>
@@ -53,7 +53,7 @@
           data-t={table.id}
           data-r={r}
           data-c="0"
-          class="label"
+          class="label header-col"
           class:sel={selected.has(`${r},0`)}
           class:anchor={anchor(r, 0)}
           style={style(row.id, 'label')}
@@ -61,20 +61,22 @@
         >{#if kind === 'source'}<span class="icon src">⇄</span>{:else if kind === 'formula'}<span class="icon fx">ƒ</span>{/if}{row.label}</td>
         {#each months as m, i (m)}
           {@const v = ev.row(table, row, m)}
+          {@const linked = kind !== 'formula' && !!table.cellSources[`${row.id}|${m}`]}
           <td
             data-t={table.id}
             data-r={r}
             data-c={i + 1}
             class="right"
             class:neg={neg(v) && !styled(row.id, m)}
-            class:src={kind === 'source' && row.values[m] === undefined}
-            class:ovr={kind === 'source' && row.values[m] !== undefined}
+            class:src={linked || (kind === 'source' && row.values[m] === undefined)}
+            class:linked
+            class:ovr={!linked && kind === 'source' && row.values[m] !== undefined}
             class:fx={kind === 'formula'}
             class:err={isErr(v)}
             class:sel={selected.has(`${r},${i + 1}`)}
             class:anchor={anchor(r, i + 1)}
             style={style(row.id, m)}
-            title={tip(v)}
+            title={tip(v) ?? (linked ? 'Total of a ledger column' : undefined)}
           >{show(v)}</td>
         {/each}
       </tr>
@@ -128,11 +130,7 @@
 
 <style>
   th.year {
-    text-align: left;
     color: var(--text);
-  }
-  td.label {
-    font-weight: 500;
   }
   .icon {
     display: inline-block;
@@ -161,6 +159,16 @@
     border-style: solid;
     border-width: 0 7px 7px 0;
     border-color: transparent #f59e0b transparent transparent;
+  }
+  /* A cell that shows one ledger column's total: marked with a blue corner tick. */
+  td.linked::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    border-style: solid;
+    border-width: 7px 7px 0 0;
+    border-color: #1d63c7 transparent transparent transparent;
   }
   td.err {
     color: var(--neg);

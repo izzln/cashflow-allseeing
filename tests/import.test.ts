@@ -4,7 +4,9 @@ import { detectDateOrder, excelSerialToDate, parseDate } from '../src/lib/dates'
 import { decodeText, detectDelimiter, parseDelimited } from '../src/lib/import/delimited';
 import { buildEntries, guessMap } from '../src/lib/import/mapping';
 import { readSpreadsheet } from '../src/lib/import/xlsx';
-import type { ImportMap } from '../src/lib/model';
+import { defaultColumns, type ImportMap } from '../src/lib/model';
+
+const cols = defaultColumns();
 
 const fixture = (name: string) => new Uint8Array(readFileSync(new URL(`./fixtures/${name}`, import.meta.url)));
 
@@ -63,12 +65,15 @@ describe('xlsx', () => {
 describe('mapping', () => {
   it('guesses Chinese bank columns and builds entries', async () => {
     const [sheet] = await readSpreadsheet('bank.xlsx', fixture('bank.xlsx'));
-    const guess = guessMap(sheet.rows[0]);
-    expect(guess).toEqual({ date: '交易日期', amount: '', income: '贷方发生额', expense: '借方发生额', category: '类别', note: '摘要' });
+    const guess = guessMap(sheet.rows[0], cols);
+    expect(guess).toEqual({
+      cols: { date: '交易日期', category: '类别', note: '摘要' },
+      split: { col: 'amount', income: '贷方发生额', expense: '借方发生额' },
+    });
     const map: ImportMap = { ...guess, hasHeader: true, flip: false, sheet: '流水' };
-    const { entries, skipped } = buildEntries(sheet.rows, map);
+    const { entries, skipped } = buildEntries(sheet.rows, map, cols);
     expect(skipped).toBe(1); // the total row has no date
-    expect(entries.map((e) => [e.date, e.amount, e.category])).toEqual([
+    expect(entries.map((e) => [e.cells.date, e.cells.amount, e.cells.category])).toEqual([
       ['2026-11-03', -1200.5, '供应商'],
       ['2026-11-15', 30000, '销售'],
       ['2026-11-20', -8000, '房租'],
@@ -78,14 +83,23 @@ describe('mapping', () => {
 
   it('guesses a single amount column and supports flipping', () => {
     const rows = [['Date', 'Amount', 'Category', 'Memo'], ['2026-11-02', '350', 'Office', 'Ink']];
-    const guess = guessMap(rows[0]);
-    expect(guess).toMatchObject({ date: 'Date', amount: 'Amount', category: 'Category', note: 'Memo' });
-    const { entries } = buildEntries(rows, { ...guess, hasHeader: true, flip: true, sheet: '' });
-    expect(entries[0].amount).toBe(-350);
+    const guess = guessMap(rows[0], cols);
+    expect(guess).toEqual({ cols: { date: 'Date', amount: 'Amount', category: 'Category', note: 'Memo' }, split: null });
+    const { entries } = buildEntries(rows, { ...guess, hasHeader: true, flip: true, sheet: '' }, cols);
+    expect(entries[0].cells.amount).toBe(-350);
+  });
+
+  it('fills custom columns by name, including checkboxes', () => {
+    const custom = [...cols, { id: 'c5', name: 'Paid', type: 'checkbox' as const }, { id: 'c6', name: 'Invoice no.', type: 'text' as const }];
+    const rows = [['日期', '金额', 'paid', 'Invoice No.'], ['2026-11-02', '-10', '是', 'A-1'], ['2026-11-03', '-20', '', 'A-2']];
+    const guess = guessMap(rows[0], custom);
+    expect(guess.cols).toMatchObject({ date: '日期', amount: '金额', c5: 'paid', c6: 'Invoice No.' });
+    const { entries } = buildEntries(rows, { ...guess, hasHeader: true, flip: false, sheet: '' }, custom);
+    expect(entries.map((e) => [e.cells.c5, e.cells.c6])).toEqual([[true, 'A-1'], [undefined, 'A-2']]);
   });
 
   it('works without a header row, by column number', () => {
-    const map: ImportMap = { hasHeader: false, date: '0', amount: '1', income: '', expense: '', category: '', note: '2', flip: false, sheet: '' };
-    expect(buildEntries([['2026-11-01', '-5', 'x']], map).entries[0]).toMatchObject({ date: '2026-11-01', amount: -5, note: 'x' });
+    const map: ImportMap = { hasHeader: false, cols: { date: '0', amount: '1', note: '2' }, split: null, flip: false, sheet: '' };
+    expect(buildEntries([['2026-11-01', '-5', 'x']], map, cols).entries[0].cells).toEqual({ date: '2026-11-01', amount: -5, note: 'x' });
   });
 });

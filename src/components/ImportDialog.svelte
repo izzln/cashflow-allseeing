@@ -2,7 +2,8 @@
   import { untrack } from 'svelte';
   import { app } from '../lib/store.svelte';
   import { formatNumber } from '../lib/format';
-  import { buildEntries, columnOf, FIELD_LABELS, guessMap, type Field } from '../lib/import/mapping';
+  import { amountColumn, buildEntries, columnOf, guessMap } from '../lib/import/mapping';
+  import { cellDisplay } from '../lib/ledger';
   import type { SheetData } from '../lib/import/xlsx';
   import type { ImportMap, LedgerTable } from '../lib/model';
 
@@ -13,23 +14,23 @@
     onclose: () => void;
   } = $props();
 
+  const columns = untrack(() => ledger.columns.filter((c) => c.type !== 'files'));
+  const mainCol = untrack(() => amountColumn(ledger.columns));
+
   // Start from the ledger's saved mapping when it still fits the file, else guess from the header.
   function initial(): ImportMap {
     const saved = ledger.importMap;
     const sheet = sheets.find((s) => s.name === saved?.sheet) ?? sheets[0];
     const header = sheet.rows[0] ?? [];
-    if (saved) {
-      const fits = (['date', 'amount', 'income', 'expense'] as Field[]).every(
-        (f) => !saved[f] || columnOf(saved[f], header, saved.hasHeader) >= 0,
-      );
-      if (fits && saved.date) return { ...saved, sheet: sheet.name };
+    if (saved && Object.keys(saved.cols).length + (saved.split ? 1 : 0) > 0) {
+      const names = [...Object.values(saved.cols), saved.split?.income ?? '', saved.split?.expense ?? ''].filter(Boolean);
+      if (names.every((n) => columnOf(n, header, saved.hasHeader) >= 0)) return { ...saved, sheet: sheet.name };
     }
-    return { ...guessMap(header), hasHeader: true, flip: false, sheet: sheet.name };
+    return { ...guessMap(header, ledger.columns), hasHeader: true, flip: false, sheet: sheet.name };
   }
 
   let map = $state<ImportMap>(untrack(initial));
   let mode = $state<'replace' | 'append'>('replace');
-  let split = $state(untrack(() => !!(map.income || map.expense) && !map.amount));
 
   const sheet = $derived(sheets.find((s) => s.name === map.sheet) ?? sheets[0]);
   const header = $derived(sheet.rows[0] ?? []);
@@ -41,24 +42,43 @@
         : { value: String(i), label: `Column ${i + 1}: ${sheet.rows[0]?.[i] ?? ''}` },
     ).filter((o) => o.value !== ''),
   );
-  const effective = $derived<ImportMap>(split ? { ...map, amount: '' } : { ...map, income: '', expense: '' });
-  const result = $derived(buildEntries(sheet.rows, effective));
-  const total = $derived(result.entries.reduce((s, e) => s + (e.amount ?? 0), 0));
-  const fields = $derived<Field[]>(split ? ['date', 'income', 'expense', 'category', 'note'] : ['date', 'amount', 'category', 'note']);
-  const canImport = $derived(!!map.date && (split ? !!(map.income || map.expense) : !!map.amount) && result.entries.length > 0);
+  const result = $derived(buildEntries(sheet.rows, map, ledger.columns));
+  const total = $derived(
+    mainCol ? result.entries.reduce((s, e) => s + (typeof e.cells[mainCol.id] === 'number' ? (e.cells[mainCol.id] as number) : 0), 0) : 0,
+  );
+  const canImport = $derived(result.entries.length > 0);
 
   function setHeader(on: boolean) {
-    if (on) map = { ...map, ...guessMap(header), hasHeader: true };
-    else map = { ...map, hasHeader: false, date: '', amount: '', income: '', expense: '', category: '', note: '' };
+    map = on
+      ? { ...map, ...guessMap(header, ledger.columns), hasHeader: true }
+      : { ...map, hasHeader: false, cols: {}, split: null };
   }
 
   function setSheet(name: string) {
     const s = sheets.find((x) => x.name === name) ?? sheets[0];
-    map = { ...map, ...(map.hasHeader ? guessMap(s.rows[0] ?? []) : {}), sheet: s.name };
+    map = { ...map, ...(map.hasHeader ? guessMap(s.rows[0] ?? [], ledger.columns) : { cols: {}, split: null }), sheet: s.name };
+  }
+
+  function setCol(colId: string, value: string) {
+    const cols = { ...map.cols };
+    if (value) cols[colId] = value;
+    else delete cols[colId];
+    map = { ...map, cols };
+  }
+
+  function setSplit(on: boolean) {
+    if (!mainCol) return;
+    if (on) {
+      const cols = { ...map.cols };
+      delete cols[mainCol.id];
+      map = { ...map, cols, split: { col: mainCol.id, income: '', expense: '' } };
+    } else {
+      map = { ...map, split: null };
+    }
   }
 
   function confirmImport() {
-    app.importEntries(ledger.id, result.entries, mode, $state.snapshot(effective), fileName);
+    app.importEntries(ledger.id, result.entries, mode, $state.snapshot(map) as ImportMap, fileName);
     onclose();
   }
 </script>
@@ -80,36 +100,58 @@
         <input type="checkbox" checked={map.hasHeader} onchange={(e) => setHeader((e.target as HTMLInputElement).checked)} />
         First row has column names
       </label>
-      <label class="check">
-        <input type="checkbox" bind:checked={split} />
-        Money in and money out are separate columns
-      </label>
-      {#each fields as f (f)}
-        <label>{FIELD_LABELS[f]}
-          <select bind:value={map[f]}>
-            <option value="">— none —</option>
-            {#each options as o (o.value)}<option value={o.value}>{o.label}</option>{/each}
-          </select>
+      {#if mainCol}
+        <label class="check">
+          <input type="checkbox" checked={!!map.split} onchange={(e) => setSplit((e.target as HTMLInputElement).checked)} />
+          “{mainCol.name}” comes from separate money-in and money-out columns
         </label>
+      {/if}
+      {#each columns as col (col.id)}
+        {#if map.split && map.split.col === col.id}
+          <label>{col.name}: money in
+            <select value={map.split.income} onchange={(e) => (map = { ...map, split: { ...map.split!, income: (e.target as HTMLSelectElement).value } })}>
+              <option value="">— none —</option>
+              {#each options as o (o.value)}<option value={o.value}>{o.label}</option>{/each}
+            </select>
+          </label>
+          <label>{col.name}: money out
+            <select value={map.split.expense} onchange={(e) => (map = { ...map, split: { ...map.split!, expense: (e.target as HTMLSelectElement).value } })}>
+              <option value="">— none —</option>
+              {#each options as o (o.value)}<option value={o.value}>{o.label}</option>{/each}
+            </select>
+          </label>
+        {:else}
+          <label>{col.name}
+            <select value={map.cols[col.id] ?? ''} onchange={(e) => setCol(col.id, (e.target as HTMLSelectElement).value)}>
+              <option value="">— none —</option>
+              {#each options as o (o.value)}<option value={o.value}>{o.label}</option>{/each}
+            </select>
+          </label>
+        {/if}
       {/each}
       <label class="check">
         <input type="checkbox" bind:checked={map.flip} />
-        Flip signs (if this file shows payments as positive numbers)
+        Flip signs of numbers (if this file shows payments as positive numbers)
       </label>
     </div>
 
     <div class="summary">
-      <b>{result.entries.length}</b> entries, total <b class:neg={total < 0}>{formatNumber(total)}</b>
+      <b>{result.entries.length}</b> entries{#if mainCol}, {mainCol.name} total <b class:neg={total < 0}>{formatNumber(total)}</b>{/if}
       {#if result.skipped}· {result.skipped} row(s) skipped (no valid date or amount){/if}
       {#if result.missing.length}<div class="warn">Not found in this file: {result.missing.join(', ')}</div>{/if}
     </div>
 
     <div class="preview">
       <table>
-        <thead><tr><th>Date</th><th class="right">Amount</th><th>Category</th><th>Note</th></tr></thead>
+        <thead><tr>{#each columns as col (col.id)}<th class:right={col.type === 'number'}>{col.name}</th>{/each}</tr></thead>
         <tbody>
           {#each result.entries.slice(0, 8) as e (e.id)}
-            <tr><td>{e.date}</td><td class="right" class:neg={(e.amount ?? 0) < 0}>{formatNumber(e.amount)}</td><td>{e.category}</td><td>{e.note}</td></tr>
+            <tr>
+              {#each columns as col (col.id)}
+                {@const v = e.cells[col.id]}
+                <td class:right={col.type === 'number'} class:neg={typeof v === 'number' && v < 0}>{col.type === 'checkbox' ? (v ? '✓' : '') : cellDisplay(col.type, v)}</td>
+              {/each}
+            </tr>
           {/each}
         </tbody>
       </table>
@@ -142,7 +184,7 @@
   .dialog {
     background: var(--panel);
     border-radius: 12px;
-    width: min(720px, 100%);
+    width: min(760px, 100%);
     padding: 18px 20px;
     box-shadow: 0 20px 50px rgba(0, 0, 0, 0.25);
   }

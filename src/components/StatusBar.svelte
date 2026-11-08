@@ -9,7 +9,7 @@
 {#if app.notice || stats.count > 0}
   <div class="status" role="status">
     {#if app.notice}
-      <span class="notice">{app.notice}</span>
+      <span class="notice" class:info={app.noticeTone === 'info'}>{app.notice}</span>
     {:else}
       <span><b>Sum</b> {formatNumber(stats.sum)}</span>
       <span><b>Average</b> {formatNumber(stats.avg)}</span>
@@ -41,5 +41,8 @@
   }
   .notice {
     color: var(--neg);
+  }
+  .notice.info {
+    color: var(--text);
   }
 </style>
