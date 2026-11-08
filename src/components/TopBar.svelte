@@ -21,7 +21,7 @@
     flex-shrink: 0;
     min-height: 52px;
     position: relative;
-    z-index: 2600;
+    z-index: var(--z-topbar);
   }
   .back {
     color: var(--accent);

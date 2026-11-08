@@ -24,8 +24,8 @@
     renaming = null;
   }
 
-  function remove(id: string, name: string) {
-    if (confirm(`Delete sheet "${name}" and all its tables?`)) app.deleteSheet(id);
+  function remove(id: string) {
+    app.deleteSheet(id); // undoable; the notice offers Undo
   }
 </script>
 
@@ -50,7 +50,7 @@
         <button class="mini" onclick={() => app.moveSheet(s.id, -1)} title="Move left">‹</button>
         <button class="mini" onclick={() => app.moveSheet(s.id, 1)} title="Move right">›</button>
         {#if app.wb.sheets.length > 1}
-          <button class="mini" onclick={() => remove(s.id, s.name)} title="Delete sheet">×</button>
+          <button class="mini" onclick={() => remove(s.id)} title="Delete sheet">×</button>
         {/if}
       {/if}
     </div>
@@ -74,7 +74,7 @@
   .tab {
     display: flex;
     align-items: center;
-    border-radius: 8px;
+    border-radius: var(--radius-8);
     padding: 2px;
   }
   .tab.active {
@@ -91,14 +91,14 @@
   }
   .mini {
     padding: 2px 6px;
-    min-height: 26px;
+    min-height: var(--control-h);
     color: var(--muted);
   }
   .tab input {
     width: 140px;
     padding: 4px 6px;
     border: 1px solid var(--accent);
-    border-radius: 6px;
+    border-radius: var(--radius-6);
   }
   .add {
     white-space: nowrap;

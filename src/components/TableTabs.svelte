@@ -252,14 +252,14 @@
     padding: 0;
     overflow: hidden;
     min-height: 0;
-    border-radius: 4px;
+    border-radius: var(--radius-4);
     touch-action: none;
     cursor: grab;
   }
   .tab.on {
     background: var(--accent);
     border-color: var(--accent);
-    color: #fff;
+    color: var(--on-accent);
   }
   .marker {
     position: absolute;
@@ -275,11 +275,11 @@
   }
   .ghost {
     position: fixed;
-    z-index: 3000;
+    z-index: var(--z-dialog);
     pointer-events: none;
     border: 2px dashed var(--accent);
     background: rgba(255, 255, 255, 0.9);
-    border-radius: 8px;
+    border-radius: var(--radius-8);
     padding: 10px 14px;
     color: var(--accent);
     font-weight: 600;

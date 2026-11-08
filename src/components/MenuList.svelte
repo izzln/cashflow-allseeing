@@ -71,10 +71,10 @@
     margin: 0;
     padding: 5px;
     min-width: 220px;
-    background: rgba(255, 255, 255, 0.98);
+    background: var(--menu-bg);
     border: 1px solid var(--line);
-    border-radius: 10px;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+    border-radius: var(--radius-10);
+    box-shadow: var(--shadow-menu);
     -webkit-backdrop-filter: blur(20px);
     backdrop-filter: blur(20px);
   }
@@ -87,7 +87,7 @@
     width: 100%;
     border: none;
     background: none;
-    border-radius: 5px;
+    border-radius: var(--radius-5);
     padding: 4px 8px;
     min-height: 28px;
     text-align: left;
@@ -102,12 +102,12 @@
   button:not(:disabled):focus-visible,
   button[aria-expanded='true'] {
     background: var(--accent);
-    color: #fff;
+    color: var(--on-accent);
     outline: none;
   }
   button:not(:disabled):hover .keys,
   button:not(:disabled):focus-visible .keys {
-    color: rgba(255, 255, 255, 0.85);
+    color: var(--on-accent-muted);
   }
   .check {
     width: 14px;

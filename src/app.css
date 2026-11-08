@@ -1,16 +1,63 @@
 :root {
+  /* Stories Web App tokens (design system). The accent is this app's green override (see CLAUDE.md). */
   --bg: #f5f6f8;
   --panel: #ffffff;
   --line: #d9dde3;
   --line-strong: #b8bfc8;
   --text: #1f2328;
   --muted: #6a737d;
-  --accent: #2f6fde;
-  --accent-soft: rgba(47, 111, 222, 0.12);
+  --accent: #1b7a43;
+  --accent-soft: rgba(27, 122, 67, 0.12);
+  --on-accent: #ffffff;
+  --on-accent-muted: rgba(255, 255, 255, 0.85);
   --neg: #c4322b;
   --head: #f0f2f5;
   --foot: #f7f8fa;
   --head-col: #f6f7f9;
+  --badge-warn-bg: #fff4e5;
+  --badge-warn-ink: #7a4a00;
+  --banner-bg: #eef4ff;
+  --banner-line: #c9dafc;
+  --menu-dark: #2b2b2d;
+  --menu-dark-ink: #ffffff;
+  --menu-dark-divider: rgba(255, 255, 255, 0.15);
+  --menu-bg: rgba(255, 255, 255, 0.98);
+  --scrim: rgba(15, 23, 42, 0.35);
+  --scrim-strong: rgba(15, 23, 42, 0.4);
+  /* App-specific (cashflow markers) */
+  --cf-source: #1d63c7;
+  --cf-formula: #6941c6;
+  --cf-neg-linked: #b8336a;
+  --cf-override: #b54708;
+
+  --radius-4: 4px;
+  --radius-5: 5px;
+  --radius-6: 6px;
+  --radius-7: 7px;
+  --radius-8: 8px;
+  --radius-10: 10px;
+  --radius-12: 12px;
+  --shadow-rest: 0 1px 3px rgba(0, 0, 0, 0.06);
+  --shadow-raised: 0 2px 8px rgba(0, 0, 0, 0.15);
+  --shadow-status: 0 4px 16px rgba(0, 0, 0, 0.12);
+  --shadow-menu: 0 10px 30px rgba(0, 0, 0, 0.18);
+  --shadow-dialog: 0 20px 50px rgba(0, 0, 0, 0.25);
+  --shadow-edit-menu: 0 6px 20px rgba(0, 0, 0, 0.25);
+  --focus-halo: 0 0 0 2px var(--accent-soft);
+  --z-editor: 1000;
+  --z-status: 2000;
+  --z-topbar: 2600;
+  --z-popover: 2800;
+  --z-popup: 2950;
+  --z-dialog: 3000;
+  --z-overlay: 4000;
+  --opacity-disabled: 0.4;
+  --touch-target: 44px;
+  --row-h: 28px;
+  --control-h: 30px;
+  --field-h: 32px;
+  --title-h: 32px;
+
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
     'Microsoft YaHei', sans-serif;
   font-size: 13px;
@@ -41,9 +88,9 @@ select {
 button {
   border: 1px solid var(--line);
   background: var(--panel);
-  border-radius: 6px;
+  border-radius: var(--radius-6);
   padding: 4px 10px;
-  min-height: 30px;
+  min-height: var(--control-h);
   cursor: pointer;
 }
 
@@ -52,8 +99,21 @@ button:hover:not(:disabled) {
 }
 
 button:disabled {
-  opacity: 0.4;
+  opacity: var(--opacity-disabled);
   cursor: default;
+}
+
+/* Touch: controls grow to the touch target (Stories Web App). Components size controls with these
+   tokens; :where() keeps this fallback weaker than any component rule. */
+@media (pointer: coarse) {
+  :root {
+    --control-h: 44px;
+    --field-h: 44px;
+    --title-h: 44px;
+  }
+  :where(button, select, input:not([type='checkbox']):not([type='radio'])) {
+    min-height: var(--touch-target);
+  }
 }
 
 button.danger {

@@ -2,7 +2,7 @@
   import { app, COL_W, LABEL_W, ROW_H, rowKind } from '../lib/store.svelte';
   import { isErr, type CellValue } from '../lib/evaluate';
   import { formatNumber } from '../lib/format';
-  import { cellsInRanges, FIXED_FOOTERS, styleKey } from '../lib/grid';
+  import { cellsInRanges, FIXED_FOOTERS, fitColumns, styleKey, textWidth } from '../lib/grid';
   import type { CashflowTable } from '../lib/model';
   import { groupByYear, monthLabel } from '../lib/months';
   import { STYLE_BY_ID } from '../lib/styles';
@@ -16,9 +16,31 @@
   const selected = $derived(new Set(sel ? cellsInRanges(sel.ranges).map((p) => `${p.r},${p.c}`) : []));
   const nb = $derived(table.rows.length);
 
+  // Fill Window: the label column wraps; month columns shrink only to their widest number.
+  const fitting = $derived(app.maximizedId === table.id && app.fillWidth > 0);
+  const widths = $derived.by(() => {
+    app.version;
+    if (!fitting) return [LABEL_W, ...months.map(() => COL_W)];
+    const m = app.model(table);
+    const monthMins = months.map((_, i) => {
+      let w = 56;
+      for (let r = 0; r < m.rows; r++) {
+        const v = m.value({ r, c: i + 1 });
+        if (typeof v === 'number') w = Math.max(w, textWidth(formatNumber(v)));
+      }
+      return w;
+    });
+    return fitColumns(
+      [{ natural: LABEL_W, min: 120, wrap: true }, ...monthMins.map((min) => ({ natural: Math.max(COL_W, min), min, wrap: false }))],
+      app.fillWidth - 2,
+    );
+  });
+
   function style(rowId: string, colKey: string): string {
-    const s = STYLE_BY_ID[table.styles[styleKey(rowId, colKey)]];
-    return s ? `background:${s.bg};color:${s.fg}` : '';
+    const k = styleKey(rowId, colKey);
+    const s = STYLE_BY_ID[table.styles[k]];
+    const a = colKey === 'label' ? table.aligns[k] : undefined;
+    return `${s ? `background:${s.bg};color:${s.fg};` : ''}${a ? `text-align:${a};` : ''}`;
   }
 
   function styled(rowId: string, colKey: string): boolean {
@@ -33,8 +55,8 @@
 
 <table>
   <colgroup>
-    <col style="width:{LABEL_W}px" />
-    {#each months as m (m)}<col style="width:{COL_W}px" />{/each}
+    <col style="width:{widths[0]}px" />
+    {#each months as m, i (m)}<col style="width:{widths[i + 1]}px" />{/each}
   </colgroup>
   <thead>
     <tr style="height:{ROW_H}px">
@@ -54,6 +76,7 @@
           data-r={r}
           data-c="0"
           class="label header-col"
+          class:wrap={fitting}
           class:sel={selected.has(`${r},0`)}
           class:anchor={anchor(r, 0)}
           style={style(row.id, 'label')}
@@ -140,15 +163,15 @@
   }
   .icon.src,
   td.src {
-    color: #1d63c7;
+    color: var(--cf-source);
   }
   .icon.fx,
   td.fx {
-    color: #6941c6;
+    color: var(--cf-formula);
   }
   td.src.neg,
   td.fx.neg {
-    color: #b8336a;
+    color: var(--cf-neg-linked);
   }
   /* Data links use ⇄ (like source rows); a number typed over a source row shows ✎.
      Corner triangles are kept free for comments. */
@@ -163,11 +186,11 @@
   }
   td.linked::before {
     content: '⇄';
-    color: #1d63c7;
+    color: var(--cf-source);
   }
   td.ovr::before {
     content: '✎';
-    color: #b54708;
+    color: var(--cf-override);
   }
   td.err {
     color: var(--neg);

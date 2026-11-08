@@ -1,11 +1,15 @@
 <script lang="ts">
   import { tick, type Snippet } from 'svelte';
-  import { app, TITLE_H } from '../lib/store.svelte';
+  import { app } from '../lib/store.svelte';
   import { cellsInRanges, type Pos } from '../lib/grid';
   import type { Table } from '../lib/model';
 
   let { table, children, maximized = false }: { table: Table; children: Snippet; maximized?: boolean } = $props();
   let frameEl = $state<HTMLElement | null>(null);
+  let bodyWidth = $state(0);
+  $effect(() => {
+    if (maximized) app.fillWidth = bodyWidth;
+  });
 
   const sel = $derived(app.selection?.tableId === table.id ? app.selection : null);
   const selected = $derived(new Set(sel ? cellsInRanges(sel.ranges).map((p) => `${p.r},${p.c}`) : []));
@@ -234,7 +238,7 @@
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
     class="title"
-    style="height:{TITLE_H}px"
+    style="height:var(--title-h)"
     onpointerdown={onTitleDown}
     onpointermove={onTitleMove}
     onpointerup={onTitleUp}
@@ -275,6 +279,7 @@
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
     class="body"
+    bind:clientWidth={bodyWidth}
     style="--row-h:28px"
     class:has-sel={!!sel}
     onpointerdown={onCellDown}
@@ -320,6 +325,15 @@
   .frame.max .body :global(thead tr:nth-child(2) th) {
     top: var(--row-h);
   }
+  /* Fill Window: columns are fitted to the width; text, files and labels wrap. */
+  .frame.max .body :global(td.wrap),
+  .frame.max .body :global(th.wrap) {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    text-overflow: clip;
+    padding-top: 4px;
+    padding-bottom: 4px;
+  }
   .frame.max .body :global(td.header-col),
   .frame.max .body :global(tfoot td:first-child) {
     position: sticky;
@@ -343,21 +357,21 @@
   }
   @media (pointer: coarse) {
     .max-btn {
-      min-height: 32px;
-      min-width: 44px;
+      min-height: var(--touch-target);
+      min-width: var(--touch-target);
     }
   }
   .table {
     position: relative;
     background: var(--panel);
     border: 1px solid var(--line);
-    border-radius: 8px;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+    border-radius: var(--radius-8);
+    box-shadow: var(--shadow-rest);
     overflow: hidden;
   }
   .table.focused {
     border-color: var(--accent);
-    box-shadow: 0 0 0 2px var(--accent-soft);
+    box-shadow: var(--focus-halo);
   }
   .title {
     display: flex;
@@ -372,10 +386,11 @@
     border-bottom: 1px solid var(--line);
   }
   .rename {
+    min-height: 0;
     font: inherit;
     font-weight: 600;
     border: 1px solid var(--accent);
-    border-radius: 4px;
+    border-radius: var(--radius-4);
     padding: 1px 6px;
     min-width: 200px;
   }
@@ -388,7 +403,7 @@
     font-weight: 500;
     color: var(--muted);
     border: 1px solid var(--line);
-    border-radius: 4px;
+    border-radius: var(--radius-4);
     padding: 0 5px;
   }
   /* Shared cell styles for both kinds of grid. */

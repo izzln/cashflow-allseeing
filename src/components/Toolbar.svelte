@@ -31,7 +31,7 @@
     { key: 'colAfter', kind: 'button', cmd: 'insert.colAfter', icon: 'colAfter', label: 'Col. After', group: 'lines' },
     { key: 'deleteRow', kind: 'button', cmd: 'table.deleteRows', icon: 'deleteRow', label: 'Delete Row', group: 'lines' },
     { key: 'deleteCol', kind: 'button', cmd: 'table.deleteColumns', icon: 'deleteCol', label: 'Delete Col.', group: 'lines' },
-    { key: 'color', kind: 'color', icon: 'color', label: 'Color', group: 'format', title: 'Cell fill and text color' },
+    { key: 'color', kind: 'color', icon: 'color', label: 'Format', group: 'format', title: 'Cell format: text alignment and color' },
     { key: 'fill', kind: 'button', cmd: 'table.maximize', icon: 'fill', label: 'Fill Window', group: 'view', view: true },
     { key: 'zoom', kind: 'zoom', icon: 'zoomIn', label: 'Zoom', group: 'view', view: true },
     { key: 'inspector', kind: 'button', cmd: 'view.inspector', icon: 'inspector', label: 'Inspector', group: 'panel', view: true, pinned: true },
@@ -84,7 +84,12 @@
     const keys = shortcutText(c.keys);
     return `${it.title ?? labelOf(c)}${keys ? ` (${keys})` : ''}`;
   };
-  const on = (it: Item) => (it.cmd ? isEnabled(commands[it.cmd]) : it.kind === 'color' ? !!app.selection : !app.maximizedId);
+  const on = (it: Item) => (it.cmd ? isEnabled(commands[it.cmd]) : it.kind === 'color' ? !!app.selection && !app.readonly : !app.maximizedId);
+  const ALIGNS = [
+    { a: 'left', icon: 'alignLeft', cmd: 'format.align.left' },
+    { a: 'center', icon: 'alignCenter', cmd: 'format.align.center' },
+    { a: 'right', icon: 'alignRight', cmd: 'format.align.right' },
+  ] as const;
   const iconOf = (it: Item): IconName => (it.key === 'fill' && app.maximizedId ? 'restore' : it.icon);
   const labelFor = (it: Item) => (it.key === 'fill' && app.maximizedId ? 'Restore' : it.label);
   const isGroupStart = (list: Item[], i: number) => i > 0 && list[i].group !== list[i - 1].group;
@@ -99,6 +104,26 @@
     colorOpen = zoomOpen = moreOpen = moreColors = false;
   }
 </script>
+
+{#snippet formatBody()}
+  <div class="section">Text</div>
+  <div class="aligns" role="group" aria-label="Text alignment">
+    {#each ALIGNS as al (al.a)}
+      <button class:on={app.currentAlign() === al.a} aria-pressed={app.currentAlign() === al.a} disabled={!app.canAlign()}
+        title={`${labelOf(commands[al.cmd])} (${shortcutText(commands[al.cmd].keys)})`} aria-label={labelOf(commands[al.cmd])}
+        onclick={() => run(al.cmd)}><Icon name={al.icon} /></button>
+    {/each}
+  </div>
+  {#if !app.canAlign()}<p class="note">Alignment applies to text and date cells.</p>{/if}
+  <div class="section">Color</div>
+  <div class="colors">
+    {#each STYLES as s (s.id)}
+      <button class="swatch" style="background:{s.bg};color:{s.fg}" title={s.name} onclick={() => { app.applyStyle(s.id); closeAll(); }}>
+        Aa<span>{s.id === 'none' ? 'No Fill' : s.name}</span>
+      </button>
+    {/each}
+  </div>
+{/snippet}
 
 {#snippet tool(it: Item, labels: boolean, measuring = false)}
   {#if it.kind === 'zoom'}
@@ -124,12 +149,8 @@
         <Icon name="color" />{#if labels}<span class="lbl">{it.label}</span>{/if}
       </button>
       {#if colorOpen && !measuring}
-        <div class="pop colors" role="dialog" aria-label="Cell colors">
-          {#each STYLES as s (s.id)}
-            <button class="swatch" style="background:{s.bg};color:{s.fg}" title={s.name} onclick={() => { app.applyStyle(s.id); closeAll(); }}>
-              Aa<span>{s.id === 'none' ? 'No Fill' : s.name}</span>
-            </button>
-          {/each}
+        <div class="pop format" role="dialog" aria-label="Cell format">
+          {@render formatBody()}
         </div>
       {/if}
     </div>
@@ -164,13 +185,9 @@
                   <button role="menuitem" onclick={() => run('view.actualSize')} disabled={!isEnabled(commands['view.actualSize'])}>100%</button>
                 </div>
               {:else if h.kind === 'color'}
-                <button role="menuitem" disabled={!on(h)} onclick={() => (moreColors = !moreColors)}><Icon name="color" /> Color ▸</button>
+                <button role="menuitem" disabled={!on(h)} onclick={() => (moreColors = !moreColors)}><Icon name="color" /> Format ▸</button>
                 {#if moreColors}
-                  <div class="colors inline">
-                    {#each STYLES as s (s.id)}
-                      <button class="swatch" style="background:{s.bg};color:{s.fg}" title={s.name} onclick={() => { app.applyStyle(s.id); closeAll(); }}>Aa<span>{s.id === 'none' ? 'No Fill' : s.name}</span></button>
-                    {/each}
-                  </div>
+                  <div class="inline">{@render formatBody()}</div>
                 {/if}
               {:else}
                 <button role="menuitem" disabled={!on(h)} onclick={() => { if (h.cmd) run(h.cmd); closeAll(); }}>
@@ -232,7 +249,7 @@
     gap: 1px;
     border: none;
     background: transparent;
-    border-radius: 7px;
+    border-radius: var(--radius-7);
     padding: 3px 6px;
     min-width: 44px;
     min-height: 44px;
@@ -264,7 +281,7 @@
     border: 1px solid var(--line);
     background: var(--panel);
     min-width: 58px;
-    min-height: 30px;
+    min-height: var(--control-h);
     font-variant-numeric: tabular-nums;
   }
   .pop-wrap {
@@ -276,15 +293,16 @@
     inset: 0;
     z-index: 1;
   }
+  /* The toolbar sits at the right edge, so its popovers align to their trigger's right edge. */
   .pop {
     position: absolute;
     top: calc(100% + 6px);
-    left: 0;
+    right: 0;
     z-index: 2;
     background: var(--panel);
     border: 1px solid var(--line);
-    border-radius: 12px;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+    border-radius: var(--radius-12);
+    box-shadow: var(--shadow-menu);
     padding: 8px;
   }
   .pop.right {
@@ -296,9 +314,40 @@
     grid-template-columns: repeat(3, 96px);
     gap: 6px;
   }
-  .colors.inline {
+  .inline {
+    padding: 4px 6px 6px;
+  }
+  .inline .colors {
     grid-template-columns: repeat(3, 1fr);
-    padding: 4px 0 6px;
+  }
+  .section {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+    padding: 2px 2px 6px;
+  }
+  .aligns {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 10px;
+  }
+  .aligns button {
+    flex: 1;
+    min-height: var(--control-h);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .aligns button.on {
+    background: var(--accent-soft);
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  .note {
+    margin: -4px 2px 10px;
+    color: var(--muted);
+    font-size: 12px;
   }
   .swatch {
     display: flex;
@@ -341,7 +390,7 @@
   .zooms button:hover,
   .more > button:hover:not(:disabled) {
     background: var(--accent);
-    color: #fff;
+    color: var(--on-accent);
   }
   .zooms button.on {
     font-weight: 700;

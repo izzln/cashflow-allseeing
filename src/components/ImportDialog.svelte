@@ -173,8 +173,8 @@
   .overlay {
     position: fixed;
     inset: 0;
-    z-index: 3000;
-    background: rgba(15, 23, 42, 0.35);
+    z-index: var(--z-dialog);
+    background: var(--scrim);
     display: flex;
     align-items: flex-start;
     justify-content: center;
@@ -183,10 +183,10 @@
   }
   .dialog {
     background: var(--panel);
-    border-radius: 12px;
+    border-radius: var(--radius-12);
     width: min(760px, 100%);
     padding: 18px 20px;
-    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.25);
+    box-shadow: var(--shadow-dialog);
   }
   h2 {
     font-size: 17px;
@@ -217,10 +217,10 @@
   }
   select {
     border: 1px solid var(--line);
-    border-radius: 6px;
+    border-radius: var(--radius-6);
     padding: 6px 8px;
-    min-height: 32px;
-    background: #fff;
+    min-height: var(--field-h);
+    background: var(--panel);
     color: var(--text);
   }
   .summary {
@@ -237,7 +237,7 @@
     max-height: 260px;
     overflow: auto;
     border: 1px solid var(--line);
-    border-radius: 8px;
+    border-radius: var(--radius-8);
   }
   .preview table {
     border-collapse: collapse;
@@ -273,6 +273,6 @@
   .primary {
     background: var(--accent);
     border-color: var(--accent);
-    color: #fff;
+    color: var(--on-accent);
   }
 </style>

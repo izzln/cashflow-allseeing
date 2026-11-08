@@ -67,20 +67,20 @@
   .backdrop {
     position: fixed;
     inset: 0;
-    z-index: 2900;
+    z-index: calc(var(--z-popup) - 50);
   }
   .ctx {
     position: fixed;
-    z-index: 2950;
+    z-index: var(--z-popup);
   }
   /* iOS-style edit menu: a dark pill of commands. */
   .edit {
     position: fixed;
-    z-index: 2950;
+    z-index: var(--z-popup);
     display: flex;
-    background: #2b2b2d;
-    border-radius: 10px;
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+    background: var(--menu-dark);
+    border-radius: var(--radius-10);
+    box-shadow: var(--shadow-edit-menu);
     overflow: hidden;
     max-width: calc(100vw - 16px);
     overflow-x: auto;
@@ -89,16 +89,16 @@
     border: none;
     border-radius: 0;
     background: transparent;
-    color: #fff;
+    color: var(--menu-dark-ink);
     min-height: 44px;
     padding: 0 14px;
     white-space: nowrap;
-    border-right: 1px solid rgba(255, 255, 255, 0.15);
+    border-right: 1px solid var(--menu-dark-divider);
   }
   .edit button:last-child {
     border-right: none;
   }
   .edit button:active {
-    background: rgba(255, 255, 255, 0.15);
+    background: var(--menu-dark-divider);
   }
 </style>

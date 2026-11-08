@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
+  import { app } from '../lib/store.svelte';
   import { buildExport, exportFilename, fileStore, fromExport, importedName, localFileStore, type FileMeta } from '../lib/files';
   import { downloadText } from '../lib/download';
   import { session } from '../lib/session.svelte';
@@ -10,6 +11,8 @@
   let importEl = $state<HTMLInputElement | null>(null);
   let localOnly = $state<FileMeta[]>([]);
   let uploading = $state(false);
+  /** A failed action, shown at the top of the list until dismissed. */
+  let problem = $state('');
 
   async function refresh() {
     try {
@@ -27,7 +30,7 @@
     try {
       await fn();
     } catch (e) {
-      alert((e as Error).message || 'That did not work. Check the connection and try again.');
+      problem = (e as Error).message || 'That did not work. Check the connection and try again.';
     }
     refresh();
   }
@@ -50,7 +53,7 @@
         done++;
       }
     } catch (e) {
-      alert(`Uploaded ${done} file(s), then: ${(e as Error).message}`);
+      problem = `Uploaded ${done} file(s), then: ${(e as Error).message}`;
     }
     uploading = false;
     refresh();
@@ -60,17 +63,40 @@
     location.hash = `#/f/${id}`;
   }
 
+  /** A new file opens straight away as "Untitled", with its name ready to type over (no prompt). */
   async function create() {
-    const name = prompt('Name for the new file', 'Untitled');
-    if (!name?.trim()) return;
-    await attempt(async () => open((await fileStore.create(name.trim())).id));
+    const names = files.map((f) => f.name);
+    let name = 'Untitled';
+    for (let i = 2; names.includes(name); i++) name = `Untitled ${i}`;
+    await attempt(async () => {
+      const meta = await fileStore.create(name);
+      app.fileMenuRequest = 'rename';
+      open(meta.id);
+    });
   }
 
-  async function rename(f: FileMeta) {
-    const name = prompt('File name', f.name);
-    if (!name?.trim()) return;
-    await attempt(() => fileStore.rename(f.id, name));
+  // ----- rename in place -----
+  let renamingId = $state<string | null>(null);
+  let draft = $state('');
+  let renameEl = $state<HTMLInputElement | null>(null);
+
+  async function startRename(f: FileMeta) {
+    renamingId = f.id;
+    draft = f.name;
+    await tick();
+    renameEl?.focus();
+    renameEl?.select();
   }
+
+  async function finishRename(save: boolean) {
+    const id = renamingId;
+    renamingId = null;
+    const f = files.find((x) => x.id === id);
+    if (save && f && draft.trim() && draft.trim() !== f.name) await attempt(() => fileStore.rename(f.id, draft.trim()));
+  }
+
+  // Deleting a file can't be undone, so the row asks first (in place, not a browser dialog).
+  let confirmId = $state<string | null>(null);
 
   async function duplicate(f: FileMeta) {
     await attempt(() => fileStore.duplicate(f.id));
@@ -84,7 +110,7 @@
   }
 
   async function remove(f: FileMeta) {
-    if (!confirm(`Delete "${f.name}"? Download it first if you may need it again.`)) return;
+    confirmId = null;
     await attempt(() => fileStore.remove(f.id));
   }
 
@@ -100,7 +126,7 @@
       const meta = await fileStore.create(importedName(data.name, names, data.exportedAt), data.wb, data.snapshots);
       open(meta.id);
     } catch (err) {
-      alert(err instanceof SyntaxError || (err as Error).message === 'not a cashflow file' ? 'That is not a Cashflow file.' : (err as Error).message);
+      problem = err instanceof SyntaxError || (err as Error).message === 'not a cashflow file' ? 'That is not a Cashflow file.' : (err as Error).message;
     }
   }
 
@@ -139,6 +165,7 @@
   {/if}
 
   {#if error}<p class="error">{error} <button onclick={refresh}>Try again</button></p>{/if}
+  {#if problem}<p class="error" role="alert">{problem} <button onclick={() => (problem = '')}>OK</button></p>{/if}
 
   {#if loaded && !error && files.length === 0}
     <p class="empty">No files yet. Create one, or import a downloaded file.</p>
@@ -147,15 +174,32 @@
   <ul class="list">
     {#each files as f (f.id)}
       <li>
-        <a class="name" href="#/f/{f.id}">{f.name}</a>
+        {#if renamingId === f.id}
+          <input class="rename" bind:this={renameEl} bind:value={draft} aria-label="File name"
+            onblur={() => finishRename(true)}
+            onkeydown={(e) => {
+              if (e.isComposing || e.keyCode === 229) return;
+              if (e.key === 'Enter') finishRename(true);
+              if (e.key === 'Escape') finishRename(false);
+            }} />
+        {:else}
+          <a class="name" href="#/f/{f.id}" ondblclick={(e) => { e.preventDefault(); startRename(f); }}>{f.name}</a>
+        {/if}
         <span class="when">Edited {fmt.format(f.updatedAt)}</span>
         <span class="buttons">
-          <a class="btn" href="#/f/{f.id}" target="_blank" rel="noopener" title="Open in a new window">New window</a>
-          <button onclick={() => rename(f)}>Rename</button>
+          <a class="btn" href="#/f/{f.id}" target="_blank" rel="noopener" title="Open in a new window">New Window</a>
+          <button onclick={() => startRename(f)}>Rename…</button>
           <button onclick={() => duplicate(f)}>Duplicate</button>
           <button onclick={() => download(f)}>Download</button>
-          <button class="danger" onclick={() => remove(f)}>Delete</button>
+          <button class="danger" onclick={() => (confirmId = confirmId === f.id ? null : f.id)}>Delete…</button>
         </span>
+        {#if confirmId === f.id}
+          <div class="confirm" role="alertdialog" aria-label="Delete file">
+            <span>Delete “{f.name}”? This can’t be undone. Download a copy first if you may need it.</span>
+            <button onclick={() => (confirmId = null)}>Cancel</button>
+            <button class="danger-fill" onclick={() => remove(f)}>Delete</button>
+          </div>
+        {/if}
       </li>
     {/each}
   </ul>
@@ -200,7 +244,7 @@
   .primary {
     background: var(--accent);
     border-color: var(--accent);
-    color: #fff;
+    color: var(--on-accent);
   }
   .list {
     list-style: none;
@@ -208,7 +252,7 @@
     margin: 0;
     background: var(--panel);
     border: 1px solid var(--line);
-    border-radius: 10px;
+    border-radius: var(--radius-10);
   }
   .list:empty {
     display: none;
@@ -247,9 +291,9 @@
     align-items: center;
     border: 1px solid var(--line);
     background: var(--panel);
-    border-radius: 6px;
+    border-radius: var(--radius-6);
     padding: 4px 10px;
-    min-height: 30px;
+    min-height: var(--control-h);
     color: inherit;
     text-decoration: none;
   }
@@ -259,15 +303,41 @@
     gap: 10px;
     align-items: center;
     justify-content: space-between;
-    background: #eef4ff;
-    border: 1px solid #c9dafc;
-    border-radius: 10px;
+    background: var(--banner-bg);
+    border: 1px solid var(--banner-line);
+    border-radius: var(--radius-10);
     padding: 10px 14px;
     margin-bottom: 14px;
     line-height: 1.5;
   }
   .error {
     color: var(--neg);
+  }
+  .rename {
+    flex: 1 1 200px;
+    font-weight: 600;
+    font-size: 15px;
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-6);
+    padding: 4px 8px;
+  }
+  .confirm {
+    flex: 1 1 100%;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    background: var(--head);
+    border-radius: var(--radius-8);
+    padding: 8px 10px;
+  }
+  .confirm span {
+    flex: 1 1 260px;
+  }
+  .danger-fill {
+    background: var(--neg);
+    border-color: var(--neg);
+    color: var(--on-accent);
   }
   .empty,
   .note {

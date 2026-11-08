@@ -168,19 +168,20 @@
     background-image: none;
   }
   .editor {
+    min-height: 0;
     position: absolute;
     left: -9999px;
     top: 0;
     width: 10px;
     height: 10px;
     opacity: 0;
-    z-index: 1000;
+    z-index: var(--z-editor);
     border: 2px solid var(--accent);
     padding: 0 7px;
     font-variant-numeric: tabular-nums;
-    background: #fff;
+    background: var(--panel);
     outline: none;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    box-shadow: var(--shadow-raised);
   }
   .editor.open {
     opacity: 1;

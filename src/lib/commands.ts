@@ -40,12 +40,12 @@ const KEY_GLYPH: Record<string, string> = {
 export function shortcutText(k: Keys | undefined): string {
   if (!k) return '';
   const key = KEY_GLYPH[k.key] ?? k.key.toUpperCase();
-  if (k.key === '>' || k.key === '<') return isMac ? `⌘${k.key}` : `Ctrl+${k.key}`;
+  if ('><{}|'.includes(k.key)) return isMac ? `⌘${k.key}` : `Ctrl+${k.key}`;
   if (isMac) return `${k.ctrl ? '⌃' : ''}${k.alt ? '⌥' : ''}${k.shift ? '⇧' : ''}${k.mod ? '⌘' : ''}${key}`;
   return [k.ctrl && 'Ctrl', k.mod && 'Ctrl', k.alt && 'Alt', k.shift && 'Shift', key].filter(Boolean).join('+');
 }
 
-const SHIFTED: Record<string, string> = { '.': '>', ',': '<' };
+const SHIFTED: Record<string, string> = { '.': '>', ',': '<', '[': '{', ']': '}', '\\': '|' };
 
 function matches(k: Keys, e: KeyboardEvent): boolean {
   const mod = isMac ? e.metaKey : e.ctrlKey;
@@ -125,7 +125,7 @@ export function pickImportFile(tableId: string) {
       if (!sheets.length) throw new Error('The file has no data.');
       app.importing = { tableId, fileName: file.name, sheets };
     } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
+      app.flashNotice(err instanceof Error ? err.message : String(err));
     }
   };
   input.click();
@@ -136,11 +136,8 @@ export function pickImportFile(tableId: string) {
 const list: Command[] = [
   // File
   { id: 'file.list', label: 'All Files', keys: { key: 'o', mod: true, shift: true }, enabled: hasFile, run: () => void (location.hash = '#/') },
-  { id: 'file.rename', label: 'Rename File…', enabled: editable, run: () => app.startRenameFile() },
-  { id: 'file.snapshot', label: 'Take Snapshot…', enabled: editable, run: () => {
-    const label = prompt('Snapshot name', `Snapshot ${new Date().toLocaleDateString()}`);
-    if (label !== null) app.takeSnapshot(label);
-  } },
+  { id: 'file.rename', label: 'Rename File…', enabled: editable, run: () => void (app.fileMenuRequest = 'rename') },
+  { id: 'file.snapshot', label: 'Take Snapshot…', enabled: editable, run: () => void (app.fileMenuRequest = 'snapshot') },
   { id: 'file.download', label: 'Download a Copy', keys: { key: 's', mod: true, shift: true }, enabled: hasFile, run: () => app.downloadFile() },
 
   // Edit
@@ -202,6 +199,7 @@ const list: Command[] = [
     if (t?.kind === 'table') app.sortTable(t.id, t.columns[app.selection?.anchor.c ?? 0]?.id, true);
   } },
   { id: 'table.import', label: 'Import CSV or Excel…', enabled: () => editable() && dataTableFocused(), run: () => pickImportFile(focusTable()!.id) },
+  { id: 'table.duplicate', label: 'Duplicate', enabled: () => editable() && !!focusTable(), run: () => app.duplicateTable(focusTable()!.id) },
   { id: 'table.delete', label: () => deleteTableLabel(), enabled: () => editable() && !!focusTable(), run: () => app.deleteTable(focusTable()!.id) },
 
   // Format
@@ -224,6 +222,15 @@ const list: Command[] = [
       const col = t?.kind === 'table' ? t.columns[app.selection?.anchor.c ?? -1] : undefined;
       if (t && col) app.setColumnType(t.id, col.id, type);
     },
+  })),
+
+  ...(['left', 'center', 'right'] as const).map<Command>((a) => ({
+    id: `format.align.${a}`,
+    label: a === 'left' ? 'Align Left' : a === 'center' ? 'Align Center' : 'Align Right',
+    keys: { key: a === 'left' ? '{' : a === 'center' ? '|' : '}', mod: true, shift: true },
+    enabled: () => app.canAlign(),
+    checked: () => app.currentAlign() === a,
+    run: () => app.applyAlign(a),
   })),
 
   // View
@@ -264,20 +271,21 @@ export type MenuItem = string | '-' | { title: string; items: MenuItem[] };
 const COLORS: MenuItem = { title: 'Cell Color', items: STYLES.map((s) => `format.color.${s.id}`) };
 const FORMATS: MenuItem = { title: 'Column Format', items: (Object.keys(COLUMN_TYPE_LABELS) as ColumnType[]).map((t) => `format.type.${t}`) };
 const UNDO: MenuItem[] = ['edit.undo', 'edit.redo', '-'];
+const ALIGN: MenuItem = { title: 'Align', items: ['format.align.left', 'format.align.center', 'format.align.right'] };
 
 export type MenuTarget = 'cells' | 'table' | 'column' | 'rows' | 'columns';
 
 /** Right-click / long-press menu. Undo and Redo are here so touch-only use has them. */
 export function contextItems(target: MenuTarget): MenuItem[] {
   const dataTable = dataTableFocused();
-  if (target === 'table') return [...UNDO, 'edit.copy', 'edit.cut', '-', 'table.rename', 'table.maximize', '-', 'table.delete'];
+  if (target === 'table') return [...UNDO, 'edit.copy', 'edit.cut', '-', 'table.rename', 'table.duplicate', 'table.maximize', '-', 'table.delete'];
   if (target === 'rows') {
     return [...UNDO, 'insert.rowAbove', 'insert.rowBelow', '-', 'table.deleteRows', 'table.moveUp', 'table.moveDown', '-',
-      'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', '-', COLORS];
+      'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', '-', ALIGN, COLORS];
   }
   if (target === 'column' || (target === 'columns' && dataTable)) {
     return [...UNDO, 'table.renameColumn', FORMATS, '-', 'insert.colBefore', 'insert.colAfter', 'table.deleteColumns', '-',
-      'table.sortAsc', 'table.sortDesc', '-', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', '-', COLORS];
+      'table.sortAsc', 'table.sortDesc', '-', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', '-', ALIGN, COLORS];
   }
   if (target === 'columns') return [...UNDO, 'edit.copy', 'edit.paste', 'edit.delete', '-', COLORS];
   return [
@@ -285,13 +293,13 @@ export function contextItems(target: MenuTarget): MenuItem[] {
     'insert.rowAbove', 'insert.rowBelow',
     ...(dataTable ? ['insert.colBefore', 'insert.colAfter'] : []),
     '-', 'table.deleteRows', ...(dataTable ? ['table.deleteColumns'] : []),
-    '-', COLORS,
+    '-', ALIGN, COLORS,
   ];
 }
 
 /** The short edit menu shown above a selection after a tap (touch). */
 export function editMenuItems(target: MenuTarget): string[] {
-  if (target === 'table') return ['edit.copy', 'edit.cut', 'table.rename', 'table.maximize', 'table.delete'];
+  if (target === 'table') return ['edit.copy', 'table.rename', 'table.duplicate', 'table.delete'];
   if (target === 'rows') return ['table.deleteRows', 'insert.rowAbove', 'insert.rowBelow', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete'];
   if (target === 'columns' || target === 'column') {
     return dataTableFocused()
