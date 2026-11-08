@@ -21,6 +21,7 @@
     pencil: 'M4.5 19.5l1-4 10-10 3 3-10 10z M13.5 7.5l3 3',
     folder: 'M3.5 6.5h6l2 2h9v10h-17z',
     plus: 'M12 5v14 M5 12h14',
+    more: 'M7 7l5 5-5 5 M13 7l5 5-5 5',
   } as const;
   export type IconName = keyof typeof ICONS;
 </script>

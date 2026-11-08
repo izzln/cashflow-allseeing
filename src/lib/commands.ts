@@ -175,7 +175,7 @@ const list: Command[] = [
 
   // Insert
   { id: 'insert.cashflow', label: 'Cashflow', enabled: editable, run: () => app.addTable('cashflow') },
-  { id: 'insert.dataTable', label: 'Table', enabled: editable, run: () => app.addTable('table') },
+  { id: 'insert.table', label: 'Table', enabled: editable, run: () => app.addTable('table') },
   { id: 'insert.rowAbove', label: 'Row Above', keys: { key: 'ArrowUp', alt: true }, enabled: () => editable() && !!focusTable(), run: () => app.insertRow('above') },
   { id: 'insert.rowBelow', label: 'Row Below', keys: { key: 'ArrowDown', alt: true }, enabled: () => editable() && !!focusTable(), run: () => app.insertRow('below') },
   { id: 'insert.colBefore', label: 'Column Before', keys: { key: 'ArrowLeft', alt: true }, enabled: () => editable() && dataTableFocused(), run: () => app.insertColumnAt('before') },

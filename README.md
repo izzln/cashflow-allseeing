@@ -22,8 +22,9 @@ Two kinds of table sit on each sheet's canvas:
 
 **Interface (Apple HIG by default; deviations listed in CLAUDE.md)**
 - Top row: ‹ Files · file name (menu: Rename, Download a Copy, Take Snapshot, snapshots, All Files) and
-  save status · sheet tabs. Second row: icon toolbar — Cashflow, Table · rows and columns · Color
-  (fill + text sets) · Fill Window, Zoom · Inspector
+  save status · toolbar on the right — Cashflow, Table · rows and columns · Color (fill + text sets) ·
+  Fill Window, Zoom · Inspector. Narrow windows drop the labels, then move tools into a » menu.
+  Sheet tabs are on the row below
 - Mouse: click selects; double-click edits a cell, renames a table (title) or a column (header);
   right-click menus on cells, titles and row/column tabs. Touch: tap selects and shows the edit menu
   (Cut, Copy, Paste, Delete…, ••• for more); tap again to edit; long-press for the full menu

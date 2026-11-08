@@ -163,9 +163,11 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    min-width: 0;
+    min-width: 90px;
+    flex: 0 1 auto;
   }
   .trigger {
+    min-width: 0;
     display: flex;
     align-items: center;
     gap: 4px;
@@ -181,7 +183,8 @@
     background: var(--accent-soft);
   }
   .name {
-    max-width: 260px;
+    max-width: 240px;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

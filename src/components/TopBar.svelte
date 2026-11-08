@@ -1,26 +1,25 @@
 <script lang="ts">
   import FileMenu from './FileMenu.svelte';
-  import SheetTabs from './SheetTabs.svelte';
+  import Toolbar from './Toolbar.svelte';
 </script>
 
-<!-- First row: back to all files, the file (menu + status), then its sheets. -->
+<!-- One row: back to all files, the file (menu + save status), then the toolbar on the right. -->
 <header class="topbar">
   <a class="back" href="#/" title="All files">‹ Files</a>
   <FileMenu />
-  <span class="sep"></span>
-  <SheetTabs />
+  <Toolbar />
 </header>
 
 <style>
   .topbar {
     display: flex;
     align-items: center;
-    gap: 4px;
-    padding: 4px 12px;
+    gap: 6px;
+    padding: 2px 10px;
     background: var(--panel);
     border-bottom: 1px solid var(--line);
     flex-shrink: 0;
-    min-height: 44px;
+    min-height: 52px;
     position: relative;
     z-index: 2600;
   }
@@ -29,11 +28,6 @@
     text-decoration: none;
     white-space: nowrap;
     padding: 6px 6px;
-  }
-  .sep {
-    width: 1px;
-    align-self: stretch;
-    background: var(--line);
-    margin: 4px 6px;
+    flex-shrink: 0;
   }
 </style>

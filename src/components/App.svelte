@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { app } from '../lib/store.svelte';
-  import Toolbar from './Toolbar.svelte';
+  import SheetTabs from './SheetTabs.svelte';
   import Canvas from './Canvas.svelte';
   import Inspector from './Inspector.svelte';
   import StatusBar from './StatusBar.svelte';
@@ -198,7 +198,7 @@
   {@const importTable = app.importing ? app.table(app.importing.tableId) : undefined}
   <div class="shell">
     <TopBar />
-    <Toolbar />
+    <SheetTabs />
     <div class="main">
       <Canvas />
       {#if app.showInspector}
