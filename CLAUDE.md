@@ -16,6 +16,9 @@ https://claude.ai/artifact/MP8LwEVe4W4Ffw9RFyb7ij (a private Design System artif
 Stories Web App wins.** Don't copy its rules here; this file only adds what is specific to this app.
 
 ### App-specific UI (not in the design system)
+- **Accent override (owner's decision):** the accent is green like Numbers — `--accent: #1b7a43`,
+  `--accent-soft: rgba(27,122,67,.12)` (white on it 5.37:1; on its soft tint 4.55:1). Every other token is Stories'.
+  Tokens live in `src/app.css`; components use `var(--…)`, never raw values.
 - Commands are defined once in `src/lib/commands.ts`; the toolbar's overflow order is `OVERFLOW_ORDER` in
   `src/components/Toolbar.svelte`.
 - Cashflow markers: ⇄ from a table (`#1d63c7`), ƒ formula (`#6941c6`), negative in a linked/formula cell (`#b8336a`),
@@ -25,6 +28,12 @@ Stories Web App wins.** Don't copy its rules here; this file only adds what is s
   (steps 25, 50, 75, 100, 125, 150, 200, 300, 400). Row/column tabs live on an unscaled overlay with a fixed
   thickness (rows 20px / 30px touch, columns 15px / 23px touch).
 - Fill Window (one table fills the canvas, headers and first column pinned): Esc never leaves it; only Restore does.
+  Each sheet remembers its filled table. Columns are fitted to the width (`fitColumns` in `src/lib/grid.ts`):
+  text, files and row labels wrap and give up width first; numbers, dates and checkboxes never wrap.
+- Text alignment (Left / Center / Right) applies to text, date and row-label cells only, per cell
+  (`aligns`, keyed like `styles`); ⌘{ ⌘| ⌘}, the Format popover, the Align submenu and the Inspector.
+- Undoable deletes (rows, columns, tables, sheets) show a notice with Undo; irreversible ones (files,
+  snapshots) confirm in place.
 
 ## Commands
 - `npm test` (vitest, tests/), `npm run check` (svelte-check + worker tsc), `npm run build`

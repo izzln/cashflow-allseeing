@@ -48,19 +48,19 @@
   .overlay {
     position: fixed;
     inset: 0;
-    z-index: 4000;
-    background: rgba(15, 23, 42, 0.4);
+    z-index: var(--z-overlay);
+    background: var(--scrim-strong);
   }
   .card {
     width: min(380px, 100%);
     background: var(--panel);
     border: 1px solid var(--line);
-    border-radius: 12px;
+    border-radius: var(--radius-12);
     padding: 22px;
     display: flex;
     flex-direction: column;
     gap: 12px;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+    box-shadow: var(--shadow-menu);
   }
   h1 {
     font-size: 20px;
@@ -73,7 +73,7 @@
   }
   input {
     border: 1px solid var(--line);
-    border-radius: 8px;
+    border-radius: var(--radius-8);
     padding: 10px 12px;
     font-size: 16px;
   }
@@ -84,12 +84,12 @@
   .primary {
     background: var(--accent);
     border-color: var(--accent);
-    color: #fff;
+    color: var(--on-accent);
     min-height: 40px;
   }
   code {
     background: var(--head);
     padding: 1px 4px;
-    border-radius: 4px;
+    border-radius: var(--radius-4);
   }
 </style>

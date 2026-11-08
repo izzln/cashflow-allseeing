@@ -21,6 +21,7 @@ import {
   type ColumnType,
   type Filter,
   type Attachment,
+  type Align,
   type Table,
   type Workbook,
 } from './model';
@@ -134,7 +135,18 @@ class AppState {
   /** A spreadsheet being mapped in the import dialog. */
   importing = $state<{ tableId: string; fileName: string; sheets: SheetData[] } | null>(null);
   /** Table shown filling the whole workspace. */
-  maximizedId = $state<string | null>(null);
+  /** Filled table per sheet, so switching sheets and back keeps it filled. */
+  private maxBySheet = $state<Record<string, string>>({});
+  get maximizedId(): string | null {
+    const id = this.maxBySheet[this.activeSheetId];
+    return id && this.sheet?.tables.some((t) => t.id === id) ? id : null;
+  }
+  set maximizedId(id: string | null) {
+    if (id) this.maxBySheet[this.activeSheetId] = id;
+    else delete this.maxBySheet[this.activeSheetId];
+  }
+  /** Width available to the filled table (Fill Window), measured by its frame. */
+  fillWidth = $state(0);
   /** Workspace zoom, 0.25–4 (25 %–400 %, as in Numbers). Remembered per file on this device. */
   zoom = $state(1);
   canvasEl: HTMLElement | null = null;
@@ -331,7 +343,7 @@ class AppState {
     this.focusTableId = null;
     this.editing = null;
     this.menu = null;
-    this.maximizedId = null;
+    this.maxBySheet = {};
     this.filesCell = null;
     this.saveState = 'saved';
     if (snapshot) {
@@ -545,8 +557,7 @@ class AppState {
     this.commitEdit();
     this.activeSheetId = id;
     this.selection = null;
-    this.focusTableId = null;
-    this.maximizedId = null;
+    this.focusTableId = this.maximizedId;
     if (this.file) writeStorage(SHEET_KEY + this.file.id, id);
   }
 
@@ -566,6 +577,7 @@ class AppState {
   deleteSheet(id: string) {
     if (this.wb.sheets.length <= 1) return;
     const idx = this.wb.sheets.findIndex((s) => s.id === id);
+    this.flashNotice(`Deleted sheet “${this.wb.sheets[idx].name}”.`, 'info', { label: 'Undo', run: () => this.undo() });
     this.change(() => this.wb.sheets.splice(idx, 1));
     if (this.activeSheetId === id) this.setSheet(this.wb.sheets[Math.max(0, idx - 1)].id);
   }
@@ -595,10 +607,48 @@ class AppState {
   deleteTable(id: string) {
     const s = this.wb.sheets.find((s) => s.tables.some((t) => t.id === id));
     if (!s) return;
+    const gone = s.tables.find((t) => t.id === id)!;
+    this.flashNotice(`Deleted “${gone.name}”.`, 'info', { label: 'Undo', run: () => this.undo() });
     this.change(() => (s.tables = s.tables.filter((t) => t.id !== id)));
     if (this.selection?.tableId === id) this.selection = null;
     if (this.focusTableId === id) this.focusTableId = null;
     if (this.maximizedId === id) this.maximizedId = null;
+  }
+
+  /** Copy a table next to the original, with new ids so the copy is independent. */
+  duplicateTable(id: string) {
+    const t = this.table(id);
+    const sheet = this.wb.sheets.find((s) => s.tables.some((x) => x.id === id));
+    if (!t || !sheet || this.readonly) return;
+    const plain = structuredClone($state.snapshot(t)) as Table;
+    const ids = new Map<string, string>();
+    const fresh = (old: string) => {
+      if (!ids.has(old)) ids.set(old, uid());
+      return ids.get(old)!;
+    };
+    const remap = <V,>(rec: Record<string, V>) =>
+      Object.fromEntries(
+        Object.entries(rec).map(([k, v]) => {
+          const [r, c] = k.split('|');
+          return [ids.has(r) ? `${ids.get(r)}|${c}` : k, v];
+        }),
+      ) as Record<string, V>;
+    let copy: Table;
+    if (plain.kind === 'table') {
+      plain.entries = plain.entries.map((e) => ({ ...e, id: fresh(e.id) }));
+      copy = { ...plain, styles: remap(plain.styles), aligns: remap(plain.aligns) };
+    } else {
+      plain.rows = plain.rows.map((r) => ({ ...r, id: fresh(r.id) }));
+      plain.footers = plain.footers.map((f) => ({ ...f, id: fresh(f.id) }));
+      copy = { ...plain, styles: remap(plain.styles), aligns: remap(plain.aligns), cellSources: remap(plain.cellSources) };
+    }
+    copy.id = uid();
+    copy.name = `${t.name} copy`;
+    copy.x = snap(t.x + GRID * 2);
+    copy.y = snap(t.y + GRID * 2);
+    this.change(() => sheet.tables.push(copy));
+    this.focusTableId = copy.id;
+    this.selection = null;
   }
 
   renameTable(id: string, name: string) {
@@ -1259,10 +1309,10 @@ class AppState {
     }
   }
 
-  /** File name editing happens in the menu bar; it listens for this. */
-  renamingFile = $state(false);
+  /** Ask the File menu to open in rename or take-snapshot mode (it edits in place there). */
+  fileMenuRequest = $state<'rename' | 'snapshot' | null>(null);
   startRenameFile() {
-    if (this.file && !this.readonly) this.renamingFile = true;
+    if (this.file && !this.readonly) this.fileMenuRequest = 'rename';
   }
 
   /** Flip checkbox cells: all on if any selected one is off, else all off. */
@@ -1442,12 +1492,18 @@ class AppState {
 
   /** 'info' for confirmations, 'error' (default) for problems. */
   noticeTone = $state<'info' | 'error'>('error');
+  /** An optional button in the notice, e.g. Undo after a delete. */
+  noticeAction = $state<{ label: string; run: () => void } | null>(null);
 
-  flashNotice(msg: string, tone: 'info' | 'error' = 'error') {
+  flashNotice(msg: string, tone: 'info' | 'error' = 'error', action: { label: string; run: () => void } | null = null) {
     this.notice = msg;
     this.noticeTone = tone;
+    this.noticeAction = action;
     if (this.noticeTimer) clearTimeout(this.noticeTimer);
-    this.noticeTimer = setTimeout(() => (this.notice = ''), 3500);
+    this.noticeTimer = setTimeout(() => {
+      this.notice = '';
+      this.noticeAction = null;
+    }, action ? 6000 : 3500);
   }
 
   cancelEdit() {
@@ -1482,6 +1538,49 @@ class AppState {
         const kind = m.cellType(p);
         if ((kind === 'files' || kind === 'checkbox') && t.kind === 'table') delete t.entries[p.r].cells[t.columns[p.c].id];
         else m.set(p, '');
+      }
+    });
+  }
+
+  /** Cells under the selection that can take a text alignment (text, date and row labels). */
+  private alignableCells(): { t: Table; keys: string[] } | null {
+    const sel = this.selection;
+    const t = this.table(sel?.tableId);
+    if (!sel || !t) return null;
+    const m = this.model(t);
+    const keys = cellsInRanges(sel.ranges)
+      .filter((p) => p.r < m.body && ['text', 'date', 'label'].includes(m.cellType(p)))
+      .map((p) => styleKey(m.rowId(p.r), m.colKey(p.c)));
+    return { t, keys };
+  }
+
+  canAlign(): boolean {
+    return !this.readonly && (this.alignableCells()?.keys.length ?? 0) > 0;
+  }
+
+  /** The alignment of the anchor cell (left when unset), or null when it can't be aligned. */
+  currentAlign(): Align | null {
+    const sel = this.selection;
+    const t = this.table(sel?.tableId);
+    if (!sel || !t) return null;
+    const m = this.model(t);
+    const p = sel.anchor;
+    if (p.r >= m.body || !['text', 'date', 'label'].includes(m.cellType(p))) return null;
+    return t.aligns[styleKey(m.rowId(p.r), m.colKey(p.c))] ?? 'left';
+  }
+
+  /** Align text and date cells in the selection (numbers stay right, checkboxes centred). */
+  applyAlign(align: Align) {
+    const hit = this.alignableCells();
+    if (!hit || this.readonly) return;
+    if (!hit.keys.length) {
+      this.flashNotice('Alignment applies to text and date cells.');
+      return;
+    }
+    this.change(() => {
+      for (const k of hit.keys) {
+        if (align === 'left') delete hit.t.aligns[k];
+        else hit.t.aligns[k] = align;
       }
     });
   }

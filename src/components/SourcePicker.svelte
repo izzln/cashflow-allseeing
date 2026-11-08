@@ -156,15 +156,15 @@
   select {
     color: var(--text);
     border: 1px solid var(--line);
-    border-radius: 6px;
+    border-radius: var(--radius-6);
     padding: 6px 8px;
-    background: #fff;
-    min-height: 32px;
+    background: var(--panel);
+    min-height: var(--field-h);
     min-width: 0;
   }
   .filter {
     border: 1px solid var(--line);
-    border-radius: 8px;
+    border-radius: var(--radius-8);
     padding: 6px;
     display: flex;
     flex-direction: column;
@@ -187,7 +187,7 @@
   }
   .count {
     color: var(--muted);
-    font-size: 11px;
+    font-size: 12px;
   }
   .hint {
     color: var(--muted);

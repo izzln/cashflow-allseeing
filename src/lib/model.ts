@@ -57,6 +57,8 @@ interface TableBase {
   y: number;
   /** Style preset per cell, keyed by `${rowId}|${colKey}`. */
   styles: Record<string, string>;
+  /** Text alignment per cell (text, date and row-label cells only), same keys as styles. */
+  aligns: Record<string, Align>;
 }
 
 /** A month-by-month cash-flow table. */
@@ -137,6 +139,8 @@ export interface Workbook {
   settings: FileSettings;
 }
 
+export type Align = 'left' | 'center' | 'right';
+
 export const GRID = 20;
 export const DEFAULT_SETTINGS: FileSettings = { syncMinutes: 15 };
 
@@ -175,6 +179,7 @@ export function newCashflow(name: string, x = GRID * 2, y = GRID * 2): CashflowT
     footers: [],
     cellSources: {},
     styles: {},
+    aligns: {},
   };
 }
 
@@ -188,6 +193,7 @@ export function newDataTable(name: string, x = GRID * 2, y = GRID * 2): DataTabl
     columns: defaultColumns(),
     entries: [0, 1, 2].map(() => newEntry()),
     styles: {},
+    aligns: {},
   };
 }
 
@@ -323,6 +329,9 @@ function normTable(t: any): Table {
     x: num(t?.x),
     y: num(t?.y),
     styles: normStyles(t?.styles),
+    aligns: Object.fromEntries(
+      Object.entries((t?.aligns as object) ?? {}).filter(([, v]) => v === 'left' || v === 'center' || v === 'right'),
+    ) as Record<string, Align>,
   };
   if (t?.kind === 'table') {
     const columns = normColumns(t.columns);

@@ -25,14 +25,17 @@
     error: 'Not saved',
   } as const;
 
-  // ⇧⌘O etc. still work from the keyboard; "Rename File" from elsewhere opens the menu in rename mode.
+  // Commands elsewhere ask the menu to open in rename or take-snapshot mode.
   $effect(() => {
-    if (app.renamingFile) {
-      app.renamingFile = false;
-      open = true;
-      void startRename();
-    }
+    const req = app.fileMenuRequest;
+    if (!req) return;
+    app.fileMenuRequest = null;
+    open = true;
+    void (req === 'rename' ? startRename() : startSnapshot());
   });
+
+  /** Snapshot deletes can't be undone, so they ask first — in place, not in a browser dialog. */
+  let confirmDelete = $state<string | null>(null);
 
   async function startRename() {
     if (app.readonly) return;
@@ -43,9 +46,11 @@
     nameEl?.select();
   }
 
+  /** Enter saves and closes the menu, as renaming a document title does on the Mac; Esc just stops renaming. */
   function finishRename(save: boolean) {
     if (save && name.trim()) app.renameFile(name);
     renaming = false;
+    if (save) close();
   }
 
   async function startSnapshot() {
@@ -66,6 +71,7 @@
     open = false;
     renaming = false;
     taking = false;
+    confirmDelete = null;
   }
 
   async function toNewFile() {
@@ -144,9 +150,16 @@
             </a>
             {#if !app.readonly}
               <button class="x" aria-label={`Delete snapshot ${s.label}`} title="Delete snapshot"
-                onclick={() => confirm(`Delete snapshot "${s.label}"?`) && app.deleteSnapshot(s.id)}>×</button>
+                onclick={() => (confirmDelete = confirmDelete === s.id ? null : s.id)}>×</button>
             {/if}
           </li>
+          {#if confirmDelete === s.id}
+            <li class="confirm">
+              <span>Delete “{s.label}”? This can’t be undone.</span>
+              <button onclick={() => (confirmDelete = null)}>Cancel</button>
+              <button class="danger-fill" onclick={() => { app.deleteSnapshot(s.id); confirmDelete = null; }}>Delete</button>
+            </li>
+          {/if}
         {:else}
           <li class="hint">None yet. One is taken automatically at each month-end.</li>
         {/each}
@@ -175,7 +188,7 @@
     background: transparent;
     font-weight: 600;
     padding: 4px 8px;
-    border-radius: 6px;
+    border-radius: var(--radius-6);
     min-width: 0;
   }
   .trigger:hover,
@@ -200,9 +213,9 @@
     color: var(--neg);
   }
   .snap {
-    background: #fff4e5;
-    color: #7a4a00;
-    border-radius: 6px;
+    background: var(--badge-warn-bg);
+    color: var(--badge-warn-ink);
+    border-radius: var(--radius-6);
     padding: 3px 8px;
     white-space: nowrap;
     font-size: 12px;
@@ -210,19 +223,19 @@
   .backdrop {
     position: fixed;
     inset: 0;
-    z-index: 2500;
+    z-index: calc(var(--z-topbar) - 100);
   }
   .menu {
     position: fixed;
-    z-index: 2600;
+    z-index: var(--z-topbar);
     margin-top: 40px;
     width: min(340px, calc(100vw - 16px));
     max-height: 75vh;
     overflow-y: auto;
-    background: rgba(255, 255, 255, 0.98);
+    background: var(--menu-bg);
     border: 1px solid var(--line);
-    border-radius: 12px;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+    border-radius: var(--radius-12);
+    box-shadow: var(--shadow-menu);
     padding: 6px;
     top: 0;
   }
@@ -234,9 +247,9 @@
     width: 100%;
     border: none;
     background: none;
-    border-radius: 6px;
+    border-radius: var(--radius-6);
     padding: 6px 8px;
-    min-height: 32px;
+    min-height: var(--field-h);
     text-align: left;
     color: inherit;
     text-decoration: none;
@@ -251,7 +264,7 @@
   .menu > button:hover,
   .menu .item:hover {
     background: var(--accent);
-    color: #fff;
+    color: var(--on-accent);
   }
   .keys {
     margin-left: auto;
@@ -279,13 +292,13 @@
     flex: 1;
     min-width: 0;
     border: 1px solid var(--accent);
-    border-radius: 6px;
+    border-radius: var(--radius-6);
     padding: 6px 8px;
   }
   .primary {
     background: var(--accent);
     border-color: var(--accent);
-    color: #fff;
+    color: var(--on-accent);
   }
   .snaps {
     list-style: none;
@@ -299,7 +312,7 @@
   }
   .snaps li.current {
     background: var(--accent-soft);
-    border-radius: 6px;
+    border-radius: var(--radius-6);
   }
   .snaps a {
     flex: 1;
@@ -308,7 +321,7 @@
     flex-direction: column;
     justify-content: center;
     padding: 4px 8px;
-    border-radius: 6px;
+    border-radius: var(--radius-6);
     color: inherit;
     text-decoration: none;
   }
@@ -332,5 +345,20 @@
     min-height: 36px;
     padding: 0;
     color: var(--neg);
+  }
+  .snaps li.confirm {
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 6px 8px;
+    background: var(--head);
+    border-radius: var(--radius-6);
+  }
+  .confirm span {
+    flex: 1 1 100%;
+  }
+  .danger-fill {
+    background: var(--neg);
+    border-color: var(--neg);
+    color: var(--on-accent);
   }
 </style>

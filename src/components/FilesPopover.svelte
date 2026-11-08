@@ -1,6 +1,7 @@
 <script lang="ts">
   import { app } from '../lib/store.svelte';
   import { formatSize } from '../lib/attachments';
+  import Icon from './Icon.svelte';
 
   const target = $derived(app.filesCell);
   const table = $derived(target ? app.table(target.tableId) : undefined);
@@ -71,7 +72,7 @@
     <ul>
       {#each list as a (a.id)}
         <li>
-          <button class="name" onclick={() => app.openAttachment(a)} title="Open">📎 {a.name}</button>
+          <button class="name" onclick={() => app.openAttachment(a)} title="Open"><Icon name="clip" size={14} /> {a.name}</button>
           <span class="size">{formatSize(a.size)}</span>
           <button class="icon" onclick={() => app.openAttachment(a, true)} title="Download" aria-label={`Download ${a.name}`}>⤓</button>
           {#if !app.readonly}
@@ -99,19 +100,19 @@
   .backdrop {
     position: fixed;
     inset: 0;
-    z-index: 2700;
+    z-index: calc(var(--z-popover) - 100);
   }
   .pop {
     position: fixed;
-    z-index: 2800;
+    z-index: var(--z-popover);
     width: 340px;
     max-height: 300px;
     display: flex;
     flex-direction: column;
     background: var(--panel);
     border: 1px solid var(--line);
-    border-radius: 12px;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+    border-radius: var(--radius-12);
+    box-shadow: var(--shadow-menu);
     padding: 10px 12px;
   }
   .pop.sheet {
@@ -175,7 +176,7 @@
   .primary {
     background: var(--accent);
     border-color: var(--accent);
-    color: #fff;
+    color: var(--on-accent);
     min-height: 36px;
   }
   .hint,

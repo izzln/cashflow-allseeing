@@ -40,7 +40,7 @@
   }
 
   function remove() {
-    if (t && confirm(`Delete table "${t.name}"?`)) app.deleteTable(t.id);
+    if (t) app.deleteTable(t.id); // undoable; the notice offers Undo
   }
 
   /** First error a formula gives in the visible months, if any. */
@@ -200,6 +200,16 @@
     {#if !ro}<button class="danger" onclick={remove}>Delete table</button>{/if}
   {/if}
 
+  {#if t && app.canAlign()}
+    {@const cur = app.currentAlign()}
+    <h3>Text</h3>
+    <div class="segmented" role="radiogroup" aria-label="Text alignment">
+      {#each [['left', 'Left'], ['center', 'Center'], ['right', 'Right']] as [a, name] (a)}
+        <button role="radio" aria-checked={cur === a} class:on={cur === a} onclick={() => app.applyAlign(a as 'left' | 'center' | 'right')}>{name}</button>
+      {/each}
+    </div>
+  {/if}
+
   <h3>Tips</h3>
   <ul class="hint">
     <li>Drag a table by its title bar. It snaps to the grid.</li>
@@ -259,10 +269,10 @@
   select {
     color: var(--text);
     border: 1px solid var(--line);
-    border-radius: 6px;
+    border-radius: var(--radius-6);
     padding: 6px 8px;
-    background: #fff;
-    min-height: 32px;
+    background: var(--panel);
+    min-height: var(--field-h);
   }
   .mono {
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -299,7 +309,7 @@
   .primary {
     background: var(--accent);
     border-color: var(--accent);
-    color: #fff;
+    color: var(--on-accent);
   }
   .hint {
     color: var(--muted);
@@ -325,6 +335,6 @@
     font-size: 11px;
     background: var(--head);
     padding: 1px 4px;
-    border-radius: 4px;
+    border-radius: var(--radius-4);
   }
 </style>

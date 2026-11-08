@@ -2,10 +2,11 @@
   import { tick } from 'svelte';
   import { app, ROW_H } from '../lib/store.svelte';
   import { formatNumber } from '../lib/format';
-  import { cellsInRanges, columnWidth, dataTableModel, styleKey } from '../lib/grid';
+  import { cellsInRanges, columnWidth, dataTableModel, fitColumns, styleKey, textWidth, type ColFit } from '../lib/grid';
   import { cellDisplay } from '../lib/columns';
   import type { Attachment, DataTable } from '../lib/model';
   import { STYLE_BY_ID } from '../lib/styles';
+  import Icon from './Icon.svelte';
 
   let { table }: { table: DataTable } = $props();
 
@@ -18,9 +19,32 @@
     return table.columns.map((_, c) => m.value({ r: nb, c }));
   });
 
+  // Fill Window fits the columns to the available width (see fitColumns).
+  const fitting = $derived(app.maximizedId === table.id && app.fillWidth > 0);
+  const widths = $derived.by(() => {
+    app.version;
+    if (!fitting) return table.columns.map(columnWidth);
+    const specs: ColFit[] = table.columns.map((col) => {
+      const natural = columnWidth(col);
+      if (col.type === 'text') return { natural, min: 80, wrap: true };
+      if (col.type === 'files') return { natural, min: 110, wrap: true };
+      let min = Math.max(56, textWidth(col.name));
+      if (col.type === 'date') min = Math.max(min, textWidth('2026-11-07'));
+      if (col.type === 'number') {
+        for (const e of table.entries) min = Math.max(min, textWidth(cellDisplay('number', e.cells[col.id])));
+        min = Math.max(min, textWidth(String(totals[table.columns.indexOf(col)] ?? '')));
+      }
+      return { natural: Math.max(natural, min), min, wrap: false };
+    });
+    return fitColumns(specs, app.fillWidth - 2);
+  });
+  const wraps = (c: number) => fitting && (table.columns[c].type === 'text' || table.columns[c].type === 'files');
+
   function style(rowId: string, colKey: string): string {
-    const s = STYLE_BY_ID[table.styles[styleKey(rowId, colKey)]];
-    return s ? `background:${s.bg};color:${s.fg}` : '';
+    const k = styleKey(rowId, colKey);
+    const s = STYLE_BY_ID[table.styles[k]];
+    const a = table.aligns[k];
+    return `${s ? `background:${s.bg};color:${s.fg};` : ''}${a ? `text-align:${a};` : ''}`;
   }
   const anchor = (r: number, c: number) => !!sel && sel.anchor.r === r && sel.anchor.c === c;
 
@@ -64,7 +88,7 @@
 
 <table>
   <colgroup>
-    {#each table.columns as col (col.id)}<col style="width:{columnWidth(col)}px" />{/each}
+    {#each table.columns as col, c (col.id)}<col style="width:{widths[c]}px" />{/each}
   </colgroup>
   <thead>
     <tr style="height:{ROW_H}px">
@@ -74,6 +98,7 @@
           data-h={c}
           class:right={col.type === 'number'}
           class:center={col.type === 'checkbox'}
+          class:wrap={wraps(c)}
           title={app.readonly ? col.name : `${col.name} — double-click to rename`}
           ondblclick={() => renameColumn(col.id)}
           oncontextmenu={(e) => {
@@ -112,6 +137,7 @@
             class:right={col.type === 'number'}
             class:center={col.type === 'checkbox'}
             class:header-col={c === 0}
+            class:wrap={wraps(c)}
             class:neg={col.type === 'number' && typeof v === 'number' && v < 0 && !table.styles[styleKey(e.id, col.id)]}
             class:sel={selected.has(`${r},${c}`)}
             class:anchor={anchor(r, c)}
@@ -136,7 +162,7 @@
             {#if col.type === 'checkbox'}
               <span class="check" class:on={v === true} data-check role="checkbox" aria-checked={v === true} aria-label={col.name}>{v === true ? '✓' : ''}</span>
             {:else if col.type === 'files'}
-              {#each files(v) as f (f.id)}<span class="chip" title={f.name}>📎 {f.name}</span>{/each}
+              {#each files(v) as f (f.id)}<span class="chip" title={f.name}><Icon name="clip" size={12} /> {f.name}</span>{/each}
             {:else}{cellDisplay(col.type, v)}{/if}
           </td>
         {/each}
@@ -165,11 +191,12 @@
 
 <style>
   .rename {
+    min-height: 0;
     width: 100%;
     font: inherit;
     font-weight: 600;
     border: 1px solid var(--accent);
-    border-radius: 4px;
+    border-radius: var(--radius-4);
     padding: 1px 4px;
   }
   .check {
@@ -179,9 +206,9 @@
     width: 18px;
     height: 18px;
     border: 1.5px solid var(--line-strong);
-    border-radius: 4px;
-    background: #fff;
-    color: #fff;
+    border-radius: var(--radius-4);
+    background: var(--panel);
+    color: var(--on-accent);
     font-size: 13px;
     font-weight: 700;
     cursor: pointer;
@@ -202,7 +229,7 @@
     text-overflow: ellipsis;
     vertical-align: middle;
     background: var(--head);
-    border-radius: 10px;
+    border-radius: var(--radius-10);
     padding: 0 7px;
     margin-right: 4px;
     font-size: 12px;

@@ -22,6 +22,48 @@ export const FIXED_FOOTERS = [
 
 const TYPE_WIDTH: Record<ColumnType, number> = { date: 112, number: 120, text: 160, checkbox: 90, files: 190 };
 
+/** Rough rendered width of a cell's text at 13px (CJK characters are about a full em). */
+export function textWidth(s: string, padding = 18): number {
+  let w = 0;
+  for (const ch of s) w += /[\u2E80-\u9FFF\uF900-\uFAFF\uFF00-\uFFEF]/.test(ch) ? 13.5 : 7.6;
+  return Math.ceil(w + padding);
+}
+
+export interface ColFit {
+  /** Width the column has on the canvas. */
+  natural: number;
+  /** Narrowest it may get (wrapping columns wrap below their natural width; others never wrap). */
+  min: number;
+  wrap: boolean;
+}
+
+/**
+ * Column widths that fill `avail` pixels (Fill Window). Wrapping columns (text, files, labels)
+ * take extra room or give it up first; the others shrink only to their content, never wrapping.
+ * When even the minimums don't fit, the minimums are returned and the table scrolls.
+ */
+export function fitColumns(cols: ColFit[], avail: number): number[] {
+  const w = cols.map((c) => Math.max(c.min, c.natural));
+  const total = () => w.reduce((a, b) => a + b, 0);
+  const grow = cols.map((c, i) => (c.wrap ? i : -1)).filter((i) => i >= 0);
+  if (total() < avail) {
+    const take = grow.length ? grow : cols.map((_, i) => i);
+    const weight = take.reduce((s, i) => s + w[i], 0) || 1;
+    const extra = avail - total();
+    for (const i of take) w[i] += (extra * w[i]) / weight;
+  } else {
+    for (const group of [grow, cols.map((c, i) => (c.wrap ? -1 : i)).filter((i) => i >= 0)]) {
+      const need = total() - avail;
+      if (need <= 0) break;
+      const room = group.reduce((s, i) => s + (w[i] - cols[i].min), 0);
+      if (room <= 0) continue;
+      const k = Math.min(1, need / room);
+      for (const i of group) w[i] -= (w[i] - cols[i].min) * k;
+    }
+  }
+  return w.map((x) => Math.floor(x));
+}
+
 export function columnWidth(c: Column): number {
   return c.id === 'note' && c.type === 'text' ? 240 : TYPE_WIDTH[c.type];
 }

@@ -22,6 +22,10 @@
     folder: 'M3.5 6.5h6l2 2h9v10h-17z',
     plus: 'M12 5v14 M5 12h14',
     more: 'M7 7l5 5-5 5 M13 7l5 5-5 5',
+    clip: 'M16.5 6.5l-7.8 7.8a2 2 0 0 0 2.8 2.8l8-8a4 4 0 0 0-5.7-5.7l-8.1 8.1a6 6 0 0 0 8.5 8.5l6.3-6.3',
+    alignLeft: 'M4 6h16 M4 10h10 M4 14h16 M4 18h10',
+    alignCenter: 'M4 6h16 M7 10h10 M4 14h16 M7 18h10',
+    alignRight: 'M4 6h16 M10 10h10 M4 14h16 M10 18h10',
   } as const;
   export type IconName = keyof typeof ICONS;
 </script>
