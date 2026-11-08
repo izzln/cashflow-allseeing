@@ -43,8 +43,10 @@ Stories Web App wins.** Don't copy its rules here; this file only adds what is s
   in place) are removed for good only when the notice expires or the page/file closes.
 - Clipboard: copy writes TSV plus HTML whose cells carry `data-cf-s` / `data-cf-a` (tint, alignment), so a paste
   into this app restores them (`formatsFromHTML`; the Clipboard-API paste matches this window's last copy).
-  Safari needs `beforecopy/beforecut/beforepaste` cancelled (App) to fire clipboard events for a grid
-  selection; menu Copy runs `execCommand('copy')` first, then the async Clipboard API.
+  iPad Safari copies only from a real text selection: `execCopy` selects a hidden copy of the text and runs
+  `execCommand('copy')` inside the tap/key press (async Clipboard API as fallback); App routes ⌘C/⌘X there and
+  runs Paste itself when no paste event follows ⌘V. Paste uses `readText` (Safari's Paste bubble), else this
+  window's last copy (`app.copiedText`). `beforecopy/beforecut/beforepaste` are cancelled for Mac Safari's menu.
 - Size class: `app.sizeClass` from the measured container width (`app.width`); CSS uses `max-width: 599px`.
 
 ## Commands

@@ -87,6 +87,19 @@ function lineCount(axis: 'row' | 'col'): number {
  * event itself (see onBeforeClipboard in App). Returns false when the browser didn't run it.
  */
 function execCopy(data: { text: string; html: string }): boolean {
+  // iPad Safari runs "copy" only for a real text selection, so select a hidden copy of the text
+  // (the copy event below then supplies the plain text and the HTML with formats).
+  const holder = document.createElement('pre');
+  holder.textContent = data.text || ' ';
+  holder.setAttribute('aria-hidden', 'true');
+  holder.style.cssText =
+    'position:fixed;left:-9999px;top:0;margin:0;white-space:pre;font-size:16px;-webkit-user-select:text;user-select:text;';
+  document.body.appendChild(holder);
+  const sel = document.getSelection();
+  const range = document.createRange();
+  range.selectNodeContents(holder);
+  sel?.removeAllRanges();
+  sel?.addRange(range);
   let done = false;
   const onCopy = (e: ClipboardEvent) => {
     if (!e.clipboardData) return;
@@ -97,19 +110,23 @@ function execCopy(data: { text: string; html: string }): boolean {
     done = true;
   };
   document.addEventListener('copy', onCopy, true);
+  let ok = false;
   try {
-    document.execCommand('copy');
+    ok = document.execCommand('copy');
   } catch {
     // Not supported: fall back to the Clipboard API.
   } finally {
     document.removeEventListener('copy', onCopy, true);
+    sel?.removeAllRanges();
+    holder.remove();
   }
-  return done;
+  return done && ok;
 }
 
 async function writeClipboard(): Promise<boolean> {
   const data = app.copyData();
   if (!data) return false;
+  app.copyReachedSystem = true;
   if (execCopy(data)) return true;
   try {
     if ('ClipboardItem' in window) {
@@ -124,9 +141,28 @@ async function writeClipboard(): Promise<boolean> {
     }
     return true;
   } catch {
-    app.flashNotice(`Copy was blocked by the browser. Use ${shortcutText({ key: 'c', mod: true })} instead.`);
-    return false;
+    // Still pasteable inside this window (Paste falls back to it).
+    app.copyReachedSystem = false;
+    return true;
   }
+}
+
+/**
+ * Paste from the clipboard. iPad Safari asks with its own "Paste" bubble; when the browser refuses
+ * (or the last copy never reached the system clipboard), paste this window's own last copy.
+ */
+async function pasteClipboard() {
+  const own = app.copiedText;
+  if (own && !app.copyReachedSystem) return app.paste(own);
+  let reason = '';
+  try {
+    const text = await navigator.clipboard.readText();
+    if (text) return app.paste(text);
+  } catch (e) {
+    reason = (e as Error)?.name ?? '';
+  }
+  if (own) return app.paste(own);
+  app.flashNotice(`Paste was blocked by the browser${reason ? ` (${reason})` : ''}. Allow it when asked, or use ${shortcutText({ key: 'v', mod: true })}.`);
 }
 
 /** Copy the whole selected table (when the table itself, not cells, is selected). */
@@ -183,14 +219,7 @@ const list: Command[] = [
     selectWholeTable();
     await writeClipboard();
   } },
-  { id: 'edit.paste', label: 'Paste', keys: { key: 'v', mod: true }, native: true, enabled: () => editable() && hasSel(), run: async () => {
-    try {
-      const text = await navigator.clipboard.readText();
-      if (text) app.paste(text);
-    } catch {
-      app.flashNotice(`Paste was blocked by the browser. Use ${shortcutText({ key: 'v', mod: true })} instead.`);
-    }
-  } },
+  { id: 'edit.paste', label: 'Paste', keys: { key: 'v', mod: true }, native: true, enabled: () => editable() && hasSel(), run: pasteClipboard },
   { id: 'edit.delete', label: () => (tableSelectedOnly() ? deleteTableLabel() : linesSelected() ? 'Clear' : 'Delete'), keys: { key: 'Backspace' }, enabled: () => editable() && (hasSel() || tableSelectedOnly()), run: () => {
     if (tableSelectedOnly()) app.deleteTable(app.focusTableId!);
     else app.clearSelected();

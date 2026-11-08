@@ -68,6 +68,24 @@
       return;
     }
     app.menu = null;
+    // ⌘C / ⌘X / ⌘V on a grid selection. iPad Safari never fires clipboard events without a text
+    // selection, so copy and cut run here (inside the key press); paste waits for the browser's
+    // paste event and asks for the clipboard only if none arrives.
+    const mod0 = (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey;
+    const k = e.key.toLowerCase();
+    if (mod0 && (k === 'c' || k === 'x' || k === 'v') && (app.selection || app.focusTableId) && !document.getSelection()?.toString()) {
+      const id = k === 'c' ? 'edit.copy' : k === 'x' ? 'edit.cut' : 'edit.paste';
+      if (k === 'v') {
+        pasteSeen = false;
+        setTimeout(() => {
+          if (!pasteSeen && isEnabled(commands[id])) void commands[id].run();
+        }, 120);
+        return;
+      }
+      e.preventDefault();
+      if (isEnabled(commands[id])) void commands[id].run();
+      return;
+    }
     const cmd = commandForKey(e) ?? (e.key === 'Delete' && !e.metaKey && !e.ctrlKey && !e.altKey ? commands['edit.delete'] : undefined);
     if (cmd) {
       e.preventDefault();
@@ -128,7 +146,11 @@
     if (e.defaultPrevented) app.clearSelected();
   }
 
+  /** A paste event arrived for the last ⌘V (so the fallback in onKeydown stays idle). */
+  let pasteSeen = true;
+
   function onPaste(e: ClipboardEvent) {
+    pasteSeen = true;
     if (view !== 'file' || inField(e) || !app.selection) return;
     const text = e.clipboardData?.getData('text/plain');
     if (!text) return;

@@ -1736,6 +1736,12 @@ class AppState {
 
   /** What this window copied last: a paste of the same text restores its tints and alignment. */
   private lastCopy: { text: string; formats: CellFormat[][] } | null = null;
+  /** The text this window copied last (the in-app fallback when the browser won't let a page read the clipboard). */
+  get copiedText(): string | null {
+    return this.lastCopy?.text ?? null;
+  }
+  /** False when the last copy didn't reach the system clipboard: Paste then uses this window's copy. */
+  copyReachedSystem = true;
 
   /** The last selected range as text grids for the clipboard, with each cell's tint and alignment. */
   copyData(): { text: string; html: string } | null {
